@@ -10,20 +10,28 @@ from Phase 2.
 Verified working:
 
 - Native PySide6 desktop application on Windows.
-- Diagram-first editor with real spherical profiles, selection, zoom, pan,
-  aperture-stop marker, image plane, traced paraxial rays, and BFL dimension.
+- Diagram-first editor with spherical, conic, and even-asphere profiles,
+  selection, zoom, pan, aperture-stop marker, image plane, traced paraxial rays,
+  and editable gap/BFL dimensions.
 - Full-frame / infinity / 50 mm / F4 / Pentax K target preset with editable EFL,
   F-number, BFL, and maximum diameter controls.
 - Initial custom triplet whose Optiland result is EFL 50.000 mm and BFL 45.460 mm.
-- Surface selection from the diagram and exact editing in the inspector.
-- Synchronized secondary surface table.
-- Gap context menu for inserting a selected catalog lens or custom singlet.
+- A persistent editor directly above the diagram exposes surface type, radius,
+  conic constant, even-asphere coefficients, thickness/gap, material, clear and
+  outer diameter, coating, comment, variable locks, and stop assignment.
+- Diagram operations for inserting, duplicating, deleting, reversing, and
+  customizing elements and surfaces. Air gaps are selectable and draggable.
+- Non-blocking context menus for surfaces, elements, and gaps. The synchronized
+  surface table remains available as an optional hidden-by-default dock.
 - Correct reversal of singlets and cemented doublets, including radius signs,
   media order, thickness order, and surface coatings.
 - Catalog part immutability and conversion to a custom copy.
 - Versioned `.kklens` ZIP container containing strict, human-readable JSON.
-- Background Optiland 0.5.9 first-order analysis so the GUI remains responsive.
-- Catalog filters for text, shape, material, and maximum outer diameter.
+- Optiland 0.5.9 runs in a persistent child process. Edits are debounced and only
+  the latest pending design is analyzed, keeping the GUI responsive during the
+  roughly eight-second engine call.
+- Catalog filters for manufacturer, text, shape, material, coating, diameter,
+  clear aperture, EFL, power sign, wavelength, and photographic relevance.
 
 ## Edmund catalog result
 
@@ -47,7 +55,10 @@ workbook. They are deliberately not designable. See
 - `src/kirakiralens/catalog/edmund.py`: read-only Excel normalization.
 - `src/kirakiralens/catalog/database.py`: SQLite schema and catalog queries.
 - `src/kirakiralens/optics/optiland_adapter.py`: pinned Optiland 0.5.9 boundary.
+- `src/kirakiralens/optics/analysis_process.py`: isolated Optiland worker process.
 - `src/kirakiralens/optics/paraxial.py`: ray paths using indices returned by Optiland.
+- `src/kirakiralens/ui/analysis_controller.py`: debouncing and process lifecycle.
+- `src/kirakiralens/ui/diagram_editor.py`: diagram selection property editor.
 - `src/kirakiralens/ui/lens_view.py`: interactive lens cross-section.
 - `src/kirakiralens/ui/main_window.py`: desktop workspace and background analysis.
 - `tests/`: domain, import, persistence, Optiland, and UI smoke tests.
@@ -61,7 +72,7 @@ Run:
 .\.venv\Scripts\python.exe -m kirakiralens
 ```
 
-The current suite has eight passing tests. A Windows-rendered 1500 x 900 capture
+The current suite has ten passing tests. A Windows-rendered 1500 x 900 capture
 is stored at `docs/images/main-window.png` and has been checked for text clipping
 and incoherent overlap.
 
@@ -81,6 +92,8 @@ Not yet implemented:
 - Vendor web collectors, price history, and stock tracking.
 - User-created preset persistence beyond the built-in editable preset.
 
-The present stop model attaches the stop to the rear surface of a selected
-element. A freely floating stop in an air gap belongs in Phase 3. Only sequential
-spherical refractive systems are exposed in the UI at this milestone.
+The aperture stop may be assigned to any modeled surface. A surface inserted in
+an air region acts as a transparent dummy surface and can therefore carry a
+floating stop. The editor currently targets rotationally symmetric sequential
+refractive systems; tilted, decentered, coordinate-break, diffractive, and
+freeform surfaces are outside the current photographic-lens model.

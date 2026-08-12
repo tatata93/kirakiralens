@@ -555,7 +555,7 @@ class InspectorPanel(QWidget):
         if element.is_catalog:
             return
         surface = element.surfaces[self.surface_index]
-        surface.radius_mm = None if self.plane.isChecked() else self.radius.value()
+        surface.radius_mm = None if self.plane.isChecked() else self.radius.value() or 50.0
         surface.material_after = self.material.text().strip() or "air"
         surface.clear_aperture_mm = self.clear_aperture.value()
         surface.radius_locked = self.radius_lock.isChecked()

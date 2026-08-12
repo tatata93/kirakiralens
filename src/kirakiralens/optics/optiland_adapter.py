@@ -38,6 +38,9 @@ class OptilandAdapter:
         system.add_surface(index=0, thickness=inf, comment="Object")
         surface_number = 1
         for element_index, element in enumerate(design.elements):
+            stop_surface_index = design.stop_surface_index
+            if stop_surface_index is None or not 0 <= stop_surface_index < len(element.surfaces):
+                stop_surface_index = len(element.surfaces) - 1
             for local_index, surface in enumerate(element.surfaces):
                 is_last = local_index == len(element.surfaces) - 1
                 thickness = element.gap_after_mm if is_last else surface.thickness_after_mm
@@ -45,13 +48,18 @@ class OptilandAdapter:
                 if not material:
                     material = "air"
                 radius = inf if surface.is_plane else float(surface.radius_mm)
+                surface_type = surface.surface_type if surface.surface_type in {"standard", "even_asphere"} else "standard"
+                geometry_parameters: dict[str, Any] = {"radius": radius, "conic": float(surface.conic)}
+                if surface_type == "even_asphere":
+                    geometry_parameters["coefficients"] = list(surface.asphere_coefficients)
                 system.add_surface(
                     index=surface_number,
                     thickness=float(thickness),
-                    radius=radius,
+                    surface_type=surface_type,
                     material=material,
-                    is_stop=(element_index == design.stop_after_element and is_last),
-                    comment=self._surface_comment(element.manufacturer, element.part_number, local_index),
+                    is_stop=(element_index == design.stop_after_element and local_index == stop_surface_index),
+                    comment=surface.comment or self._surface_comment(element.manufacturer, element.part_number, local_index),
+                    **geometry_parameters,
                 )
                 surface_number += 1
         system.add_surface(index=surface_number, comment="Image")

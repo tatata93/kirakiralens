@@ -263,6 +263,7 @@ class CatalogRepository:
                 thickness_after_mm=row["thickness_after_mm"],
                 clear_aperture_mm=row["clear_aperture_mm"],
                 coating=row["coating"] or "",
+                surface_type="standard",
                 radius_locked=True,
                 thickness_locked=True,
                 material_locked=True,

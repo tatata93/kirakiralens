@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal, Slot
+from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -15,32 +16,19 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QStyle,
     QToolBar,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..catalog.database import CatalogRepository
 from ..catalog.edmund import default_paths, import_edmund_catalog
-from ..domain import LensElement, OpticalDesign, SurfaceSpec
-from ..optics.optiland_adapter import FirstOrderAnalysis, OptilandAdapter
+from ..domain import LensElement, OpticalDesign, SurfaceSpec, new_id
+from ..optics.optiland_adapter import FirstOrderAnalysis
 from ..persistence import load_project, save_project
+from .analysis_controller import AnalysisController
+from .diagram_editor import DiagramEditor
 from .lens_view import LensLayoutView
 from .panels import CatalogPanel, InspectorPanel, SurfaceTable, spin_box
-
-
-class AnalysisSignals(QObject):
-    finished = Signal(int, object)
-
-
-class AnalysisWorker(QRunnable):
-    def __init__(self, generation: int, design: OpticalDesign):
-        super().__init__()
-        self.generation = generation
-        self.design = OpticalDesign.from_dict(design.to_dict())
-        self.signals = AnalysisSignals()
-
-    @Slot()
-    def run(self) -> None:
-        result = OptilandAdapter().analyze_first_order(self.design)
-        self.signals.finished.emit(self.generation, result)
 
 
 class MainWindow(QMainWindow):
@@ -54,9 +42,14 @@ class MainWindow(QMainWindow):
         self.current_analysis = FirstOrderAnalysis(valid=False, engine="Optiland 0.5.9", error="解析待ち")
         self.selected_element = 0
         self.selected_surface = 0
+        self.selected_kind = "surface"
         self._selected_catalog_product: int | None = None
         self._analysis_generation = 0
-        self._thread_pool = QThreadPool.globalInstance()
+        self._analysis_controller = AnalysisController(self)
+        self._analysis_debounce = QTimer(self)
+        self._analysis_debounce.setSingleShot(True)
+        self._analysis_debounce.setInterval(650)
+        self._analysis_debounce.timeout.connect(self.schedule_analysis)
 
         self.setWindowTitle("KiraKiraLens")
         self.resize(1500, 900)
@@ -126,8 +119,15 @@ class MainWindow(QMainWindow):
         self.addToolBar(toolbar)
 
     def _build_workspace(self) -> None:
+        central = QWidget(self)
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        self.diagram_editor = DiagramEditor(central)
         self.lens_view = LensLayoutView(self)
-        self.setCentralWidget(self.lens_view)
+        central_layout.addWidget(self.diagram_editor)
+        central_layout.addWidget(self.lens_view, 1)
+        self.setCentralWidget(central)
 
         self.catalog_panel = CatalogPanel(self.repository, self)
         self.catalog_panel.set_design_targets(
@@ -155,23 +155,27 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, inspector_dock)
 
         self.surface_table = SurfaceTable(self)
-        table_dock = QDockWidget("面データ", self)
-        table_dock.setObjectName("surfaceDock")
-        table_dock.setWidget(self.surface_table)
-        table_dock.setMinimumHeight(210)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, table_dock)
+        self.surface_dock = QDockWidget("面データ", self)
+        self.surface_dock.setObjectName("surfaceDock")
+        self.surface_dock.setWidget(self.surface_table)
+        self.surface_dock.setMinimumHeight(210)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.surface_dock)
         self.resizeDocks([catalog_dock, inspector_dock], [490, 330], Qt.Orientation.Horizontal)
-        self.resizeDocks([table_dock], [230], Qt.Orientation.Vertical)
+        self.resizeDocks([self.surface_dock], [230], Qt.Orientation.Vertical)
+        self.surface_dock.hide()
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("ファイル")
         file_menu.addActions([self.new_action, self.open_action, self.save_action, self.save_as_action])
         design_menu = self.menuBar().addMenu("設計")
         design_menu.addActions([self.analyze_action, self.reset_view_action])
+        design_menu.addAction(self.surface_dock.toggleViewAction())
         catalog_menu = self.menuBar().addMenu("カタログ")
         catalog_menu.addAction(self.import_action)
 
     def _connect_signals(self) -> None:
+        self._analysis_controller.finished.connect(self._analysis_finished)
+        self._analysis_controller.statusChanged.connect(self.statusBar().showMessage)
         self.new_action.triggered.connect(self.new_design)
         self.open_action.triggered.connect(self.open_design)
         self.save_action.triggered.connect(self.save_design)
@@ -185,6 +189,11 @@ class MainWindow(QMainWindow):
         self.lens_view.insertionRequested.connect(self._insertion_requested)
         self.lens_view.gapChangeRequested.connect(self.set_gap_after_element)
         self.lens_view.elementActionRequested.connect(self._element_action_requested)
+        self.lens_view.surfaceActionRequested.connect(self._diagram_action_requested)
+        self.diagram_editor.designChanged.connect(self._design_changed)
+        self.diagram_editor.selectionRequested.connect(self._select)
+        self.diagram_editor.actionRequested.connect(self._diagram_action_requested)
+        self.diagram_editor.insertionRequested.connect(self._insertion_requested)
         self.inspector.designChanged.connect(self._design_changed)
         self.inspector.reverseRequested.connect(self.reverse_element)
         self.inspector.customizeRequested.connect(self.customize_element)
@@ -203,8 +212,15 @@ class MainWindow(QMainWindow):
             element = self.design.elements[self.selected_element]
             self.selected_surface = min(max(self.selected_surface, -1), len(element.surfaces) - 1)
             self.inspector.set_selection(self.design, self.selected_element, self.selected_surface)
+            self.diagram_editor.set_selection(
+                self.design,
+                self.selected_kind,
+                self.selected_element,
+                self.selected_surface,
+            )
         else:
             self.inspector.clear_selection()
+            self.diagram_editor.clear_selection(self.design)
         self.inspector.set_analysis(self.current_analysis, self.design)
         self._sync_target_controls()
 
@@ -251,6 +267,7 @@ class MainWindow(QMainWindow):
         self._insert_element(element, index)
         self.selected_element = index
         self.selected_surface = 0
+        self.selected_kind = "surface"
         self.statusBar().showMessage(f"{element.manufacturer} {element.part_number} を追加しました", 4000)
         self._design_changed()
 
@@ -275,6 +292,7 @@ class MainWindow(QMainWindow):
         self._insert_element(element, insertion_index)
         self.selected_element = insertion_index
         self.selected_surface = 0
+        self.selected_kind = "surface"
         self._design_changed()
 
     def _insert_element(self, element: LensElement, index: int) -> None:
@@ -296,11 +314,14 @@ class MainWindow(QMainWindow):
     def reverse_element(self, element_index: int) -> None:
         if not 0 <= element_index < len(self.design.elements):
             return
+        surface_count = len(self.design.elements[element_index].surfaces)
         try:
             self.design.elements[element_index].reverse()
         except ValueError as exc:
             QMessageBox.warning(self, "反転", str(exc))
             return
+        if self.design.stop_after_element == element_index and self.design.stop_surface_index is not None:
+            self.design.stop_surface_index = surface_count - 1 - self.design.stop_surface_index
         self._design_changed()
 
     def customize_element(self, element_index: int) -> None:
@@ -325,14 +346,17 @@ class MainWindow(QMainWindow):
             self.design.stop_after_element -= 1
         elif self.design.stop_after_element == element_index:
             self.design.stop_after_element = max(0, element_index - 1)
+            self.design.stop_surface_index = None
         if self.design.elements:
             self.design.stop_after_element = min(self.design.stop_after_element, len(self.design.elements) - 1)
             self.selected_element = min(element_index, len(self.design.elements) - 1)
             self.selected_surface = 0
+            self.selected_kind = "surface"
             self.lens_view.set_selected("surface", self.selected_element, self.selected_surface)
         else:
             self.selected_element = -1
             self.selected_surface = -1
+            self.selected_kind = ""
         self.statusBar().showMessage(f"{removed.part_number or removed.name} を削除しました", 4000)
         self._design_changed()
 
@@ -349,6 +373,7 @@ class MainWindow(QMainWindow):
         if element_index == len(self.design.elements) - 1:
             self.design.settings.back_focus_target_mm = element.gap_after_mm
         self.selected_element = element_index
+        self.selected_kind = "gap"
         self._design_changed()
 
     def _element_action_requested(self, action: str, element_index: int) -> None:
@@ -359,6 +384,156 @@ class MainWindow(QMainWindow):
         elif action == "customize":
             self.customize_element(element_index)
 
+    def _diagram_action_requested(self, action: str, element_index: int, surface_index: int) -> None:
+        if action in {"delete", "reverse", "customize"}:
+            self._element_action_requested(action, element_index)
+        elif action == "element_duplicate":
+            self.duplicate_element(element_index)
+        elif action == "surface_insert_before":
+            self.insert_surface(element_index, surface_index)
+        elif action == "surface_insert_after":
+            self.insert_surface(element_index, surface_index + 1)
+        elif action == "surface_duplicate":
+            self.insert_surface(element_index, surface_index + 1, duplicate_index=surface_index)
+        elif action == "surface_delete":
+            self.delete_surface(element_index, surface_index)
+        elif action == "surface_toggle_plane":
+            self.toggle_surface_plane(element_index, surface_index)
+        elif action == "surface_toggle_radius_lock":
+            self.toggle_surface_radius_lock(element_index, surface_index)
+        elif action == "gap_zero":
+            self.set_gap_after_element(element_index, 0)
+        elif action == "gap_toggle_lock":
+            if 0 <= element_index < len(self.design.elements):
+                element = self.design.elements[element_index]
+                element.gap_locked = not element.gap_locked
+                self._design_changed()
+        elif action == "set_stop":
+            if 0 <= element_index < len(self.design.elements):
+                self.design.stop_after_element = element_index
+                surface_count = len(self.design.elements[element_index].surfaces)
+                self.design.stop_surface_index = (
+                    surface_index if 0 <= surface_index < surface_count else surface_count - 1
+                )
+                self._design_changed()
+
+    def duplicate_element(self, element_index: int) -> None:
+        if not 0 <= element_index < len(self.design.elements):
+            return
+        duplicate = deepcopy(self.design.elements[element_index])
+        duplicate.id = new_id()
+        self._insert_element(duplicate, element_index + 1)
+        self.selected_element = element_index + 1
+        self.selected_surface = 0
+        self.selected_kind = "surface"
+        self._design_changed()
+
+    def insert_surface(self, element_index: int, insertion_index: int, duplicate_index: int | None = None) -> None:
+        if not 0 <= element_index < len(self.design.elements):
+            return
+        element = self.design.elements[element_index]
+        if element.is_catalog:
+            self.statusBar().showMessage("面構成を変える前にカタログ品をカスタム化してください", 5000)
+            return
+        insertion_index = min(max(insertion_index, 0), len(element.surfaces))
+        reference_index = duplicate_index if duplicate_index is not None else min(insertion_index, len(element.surfaces) - 1)
+        reference = element.surfaces[reference_index]
+        new_surface = deepcopy(reference) if duplicate_index is not None else SurfaceSpec(
+            radius_mm=None,
+            material_after="air",
+            thickness_after_mm=1.0,
+            clear_aperture_mm=reference.clear_aperture_mm,
+        )
+        if insertion_index == 0:
+            new_surface.material_after = element.surfaces[0].material_after
+            new_surface.thickness_after_mm = 1.0
+        elif insertion_index < len(element.surfaces):
+            previous = element.surfaces[insertion_index - 1]
+            original_distance = previous.thickness_after_mm
+            previous.thickness_after_mm = original_distance / 2
+            new_surface.material_after = previous.material_after
+            new_surface.thickness_after_mm = original_distance - previous.thickness_after_mm
+        else:
+            previous = element.surfaces[-1]
+            original_gap = element.gap_after_mm
+            previous.thickness_after_mm = original_gap / 2
+            new_surface.material_after = "air"
+            new_surface.thickness_after_mm = 0
+            element.gap_after_mm = original_gap - previous.thickness_after_mm
+        element.surfaces.insert(insertion_index, new_surface)
+        if (
+            self.design.stop_after_element == element_index
+            and self.design.stop_surface_index is not None
+            and insertion_index <= self.design.stop_surface_index
+        ):
+            self.design.stop_surface_index += 1
+        self.selected_element = element_index
+        self.selected_surface = insertion_index
+        self.selected_kind = "surface"
+        self._design_changed()
+
+    def delete_surface(self, element_index: int, surface_index: int) -> None:
+        if not 0 <= element_index < len(self.design.elements):
+            return
+        element = self.design.elements[element_index]
+        if element.is_catalog:
+            self.statusBar().showMessage("面を削除する前にカタログ品をカスタム化してください", 5000)
+            return
+        if len(element.surfaces) <= 2:
+            self.statusBar().showMessage("レンズ要素には最低2面が必要です", 4000)
+            return
+        if not 0 <= surface_index < len(element.surfaces):
+            return
+        is_last = surface_index == len(element.surfaces) - 1
+        removed = element.surfaces[surface_index]
+        if surface_index > 0:
+            previous = element.surfaces[surface_index - 1]
+            if is_last:
+                element.gap_after_mm += previous.thickness_after_mm
+                previous.thickness_after_mm = 0
+                previous.material_after = "air"
+            else:
+                previous.thickness_after_mm += removed.thickness_after_mm
+                previous.material_after = removed.material_after
+        element.surfaces.pop(surface_index)
+        if self.design.stop_after_element == element_index and self.design.stop_surface_index is not None:
+            if surface_index < self.design.stop_surface_index:
+                self.design.stop_surface_index -= 1
+            elif surface_index == self.design.stop_surface_index:
+                self.design.stop_surface_index = min(surface_index, len(element.surfaces) - 1)
+        self.selected_element = element_index
+        self.selected_surface = min(surface_index, len(element.surfaces) - 1)
+        self.selected_kind = "surface"
+        self._design_changed()
+
+    def toggle_surface_plane(self, element_index: int, surface_index: int) -> None:
+        if not 0 <= element_index < len(self.design.elements):
+            return
+        element = self.design.elements[element_index]
+        if element.is_catalog or not 0 <= surface_index < len(element.surfaces):
+            self.statusBar().showMessage("カタログ面を変更する前にカスタム化してください", 5000)
+            return
+        surface = element.surfaces[surface_index]
+        surface.radius_mm = 50.0 if surface.is_plane else None
+        self.selected_kind = "surface"
+        self.selected_element = element_index
+        self.selected_surface = surface_index
+        self._design_changed()
+
+    def toggle_surface_radius_lock(self, element_index: int, surface_index: int) -> None:
+        if not 0 <= element_index < len(self.design.elements):
+            return
+        element = self.design.elements[element_index]
+        if element.is_catalog or not 0 <= surface_index < len(element.surfaces):
+            self.statusBar().showMessage("カタログ面を変更する前にカスタム化してください", 5000)
+            return
+        surface = element.surfaces[surface_index]
+        surface.radius_locked = not surface.radius_locked
+        self.selected_kind = "surface"
+        self.selected_element = element_index
+        self.selected_surface = surface_index
+        self._design_changed()
+
     def _layout_selected(self, kind: str, element_index: int, surface_index: int) -> None:
         self._select(kind, element_index, surface_index)
 
@@ -366,26 +541,26 @@ class MainWindow(QMainWindow):
         if not 0 <= element_index < len(self.design.elements):
             return
         previous_element = self.selected_element
+        self.selected_kind = kind
         self.selected_element = element_index
         if kind == "surface":
             self.selected_surface = surface_index
         elif previous_element != element_index or not 0 <= self.selected_surface < len(self.design.elements[element_index].surfaces):
             self.selected_surface = 0
         self.inspector.set_selection(self.design, self.selected_element, self.selected_surface)
+        self.diagram_editor.set_selection(self.design, kind, self.selected_element, self.selected_surface)
         self.lens_view.set_selected(kind, self.selected_element, self.selected_surface)
 
     def _design_changed(self) -> None:
-        self.current_analysis = FirstOrderAnalysis(valid=False, engine="Optiland 0.5.9", error="解析中")
+        self.current_analysis = FirstOrderAnalysis(valid=False, engine="Optiland 0.5.9", error="解析待ち")
+        self._analysis_generation += 1
         self._refresh_all()
-        self.schedule_analysis()
+        self._analysis_debounce.start()
 
     def schedule_analysis(self) -> None:
-        self._analysis_generation += 1
+        self._analysis_debounce.stop()
         generation = self._analysis_generation
-        self.statusBar().showMessage("Optilandで解析中…")
-        worker = AnalysisWorker(generation, self.design)
-        worker.signals.finished.connect(self._analysis_finished)
-        self._thread_pool.start(worker)
+        self._analysis_controller.submit(generation, self.design)
 
     @Slot(int, object)
     def _analysis_finished(self, generation: int, result: FirstOrderAnalysis) -> None:
@@ -407,6 +582,7 @@ class MainWindow(QMainWindow):
         self.current_path = None
         self.selected_element = 0
         self.selected_surface = 0
+        self.selected_kind = "surface"
         self._design_changed()
         self._update_title()
 
@@ -422,6 +598,7 @@ class MainWindow(QMainWindow):
         self.current_path = Path(path)
         self.selected_element = 0
         self.selected_surface = 0
+        self.selected_kind = "surface"
         self._design_changed()
         self._update_title()
 
@@ -456,3 +633,8 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
         self.catalog_panel.refresh()
         self.statusBar().showMessage(f"{result.accepted}品を設計可能として取り込みました", 8000)
+
+    def closeEvent(self, event) -> None:
+        self._analysis_debounce.stop()
+        self._analysis_controller.shutdown()
+        super().closeEvent(event)

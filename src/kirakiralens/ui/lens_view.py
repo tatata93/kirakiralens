@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from math import copysign, sqrt
+from math import hypot, isfinite, sqrt
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
@@ -29,6 +29,7 @@ class LensLayoutView(QGraphicsView):
     insertionRequested = Signal(str, int)
     gapChangeRequested = Signal(int, float)
     elementActionRequested = Signal(str, int)
+    surfaceActionRequested = Signal(str, int, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -45,6 +46,7 @@ class LensLayoutView(QGraphicsView):
         self._fit_on_resize = True
         self._gap_drag: tuple[int, float, float] | None = None
         self._gap_preview_value = 0.0
+        self._context_menu: QMenu | None = None
 
     def set_design(self, design: OpticalDesign, analysis: FirstOrderAnalysis | None = None) -> None:
         self._design = design
@@ -85,6 +87,8 @@ class LensLayoutView(QGraphicsView):
         colors = [QColor("#75b7c7"), QColor("#83b98c"), QColor("#d8ae62"), QColor("#9fa9d0")]
         for element_index, (element, surface_z) in enumerate(zip(design.elements, geometry, strict=True)):
             for region_index in range(len(element.surfaces) - 1):
+                if element.surfaces[region_index].material_after.strip().lower() == "air":
+                    continue
                 path = self._region_path(
                     surface_z[region_index],
                     element.surfaces[region_index],
@@ -114,13 +118,16 @@ class LensLayoutView(QGraphicsView):
                 surface_item.setData(ROLE_ELEMENT, element_index)
                 surface_item.setData(ROLE_SURFACE, surface_index)
                 radius_text = "Plane" if surface.is_plane else f"R {surface.radius_mm:.3f} mm"
-                surface_item.setToolTip(f"Surface {surface_index + 1}\n{radius_text}\nCA {surface.clear_aperture_mm or 0:.2f} mm")
+                type_text = "Even asphere" if surface.surface_type == "even_asphere" else "Standard"
+                surface_item.setToolTip(
+                    f"Surface {surface_index + 1}\n{type_text} / {radius_text} / K {surface.conic:g}\n"
+                    f"CA {surface.clear_aperture_mm or 0:.2f} mm"
+                )
                 surface_item.setZValue(4)
                 scene.addItem(surface_item)
 
                 hit_item = QGraphicsPathItem(path)
-                hit_pen = QPen(QColor(0, 0, 0, 1), 9)
-                hit_pen.setCosmetic(True)
+                hit_pen = QPen(QColor(0, 0, 0, 1), 1.6)
                 hit_item.setPen(hit_pen)
                 hit_item.setData(ROLE_KIND, "surface")
                 hit_item.setData(ROLE_ELEMENT, element_index)
@@ -129,6 +136,16 @@ class LensLayoutView(QGraphicsView):
                 hit_item.setCursor(Qt.CursorShape.PointingHandCursor)
                 hit_item.setZValue(7)
                 scene.addItem(hit_item)
+
+                stop_surface_index = design.stop_surface_index
+                if stop_surface_index is None or not 0 <= stop_surface_index < len(element.surfaces):
+                    stop_surface_index = len(element.surfaces) - 1
+                if element_index == design.stop_after_element and surface_index == stop_surface_index:
+                    stop_pen = QPen(QColor("#b3423f"), 0)
+                    stop_pen.setCosmetic(True)
+                    stop_height = min(maximum_radius + 3, element.outer_diameter_mm / 2 + 4)
+                    scene.addLine(z, -stop_height, z, -element.outer_diameter_mm / 2, stop_pen)
+                    scene.addLine(z, element.outer_diameter_mm / 2, z, stop_height, stop_pen)
 
             selected_element = self._selected and self._selected[1] == element_index
             if selected_element:
@@ -145,6 +162,11 @@ class LensLayoutView(QGraphicsView):
             label.setBrush(QColor("#26322f"))
             label.setScale(0.18)
             label.setPos(surface_z[0], -element.outer_diameter_mm / 2 - 4.2)
+            label.setData(ROLE_KIND, "element")
+            label.setData(ROLE_ELEMENT, element_index)
+            label.setData(ROLE_SURFACE, -1)
+            label.setToolTip(self._element_tooltip(element))
+            label.setCursor(Qt.CursorShape.PointingHandCursor)
             label.setZValue(5)
             scene.addItem(label)
 
@@ -165,13 +187,6 @@ class LensLayoutView(QGraphicsView):
             if element_index < len(design.elements) - 1:
                 dimension_y = maximum_radius + 2.5 + (element_index % 2) * 3.0
                 self._draw_gap_dimension(element_index, gap_start, gap_end, dimension_y)
-
-            if element_index == design.stop_after_element:
-                stop_pen = QPen(QColor("#b3423f"), 0)
-                stop_pen.setCosmetic(True)
-                stop_height = min(maximum_radius + 3, element.outer_diameter_mm / 2 + 4)
-                scene.addLine(gap_start, -stop_height, gap_start, -element.outer_diameter_mm / 2, stop_pen)
-                scene.addLine(gap_start, element.outer_diameter_mm / 2, gap_start, stop_height, stop_pen)
 
         image_pen = QPen(QColor("#276b62"), 0.8)
         image_pen.setCosmetic(True)
@@ -289,14 +304,24 @@ class LensLayoutView(QGraphicsView):
         points: list[QPointF] = []
         usable_radius = half_diameter
         if not surface.is_plane:
-            usable_radius = min(usable_radius, abs(float(surface.radius_mm)) * 0.97)
+            radius = float(surface.radius_mm)
+            if 1 + surface.conic > 0:
+                usable_radius = min(usable_radius, abs(radius) / sqrt(1 + surface.conic) * 0.97)
         for index in range(25):
             y = -usable_radius + 2 * usable_radius * index / 24
             if surface.is_plane:
                 sag = 0.0
             else:
                 radius = float(surface.radius_mm)
-                sag = radius - copysign(sqrt(max(radius * radius - y * y, 0.0)), radius)
+                radial_square = y * y
+                root = sqrt(max(1 - (1 + surface.conic) * radial_square / (radius * radius), 0.0))
+                denominator = radius * (1 + root)
+                sag = radial_square / denominator if denominator else 0.0
+                if surface.surface_type == "even_asphere":
+                    for coefficient_index, coefficient in enumerate(surface.asphere_coefficients):
+                        sag += coefficient * radial_square ** (coefficient_index + 1)
+                if not isfinite(sag):
+                    sag = 0.0
             points.append(QPointF(z + sag, y))
         return points
 
@@ -352,31 +377,76 @@ class LensLayoutView(QGraphicsView):
             return
         kind = str(item.data(ROLE_KIND))
         element_index = int(item.data(ROLE_ELEMENT))
-        self.selectionRequested.emit(kind, element_index, int(item.data(ROLE_SURFACE)))
+        surface_index = int(item.data(ROLE_SURFACE))
+        self.selectionRequested.emit(kind, element_index, surface_index)
         menu = QMenu(self)
         if kind == "gap":
+            zero_action = menu.addAction("接触 (0 mm)")
+            lock_action = menu.addAction("間隔固定を切替")
+            stop_action = menu.addAction("ここを絞り位置にする")
+            menu.addSeparator()
             catalog_action = menu.addAction("選択中のカタログレンズを挿入")
             custom_action = menu.addAction("カスタムレンズを挿入")
-            chosen = menu.exec(event.globalPos())
-            if chosen is catalog_action:
-                self.insertionRequested.emit("catalog", element_index + 1)
-            elif chosen is custom_action:
-                self.insertionRequested.emit("custom", element_index + 1)
+            zero_action.triggered.connect(lambda: self.surfaceActionRequested.emit("gap_zero", element_index, -1))
+            lock_action.triggered.connect(lambda: self.surfaceActionRequested.emit("gap_toggle_lock", element_index, -1))
+            stop_action.triggered.connect(lambda: self.surfaceActionRequested.emit("set_stop", element_index, -1))
+            catalog_action.triggered.connect(lambda: self.insertionRequested.emit("catalog", element_index + 1))
+            custom_action.triggered.connect(lambda: self.insertionRequested.emit("custom", element_index + 1))
+            self._show_context_menu(menu, event.globalPos())
             return
 
+        if kind == "surface":
+            before_action = menu.addAction("面を前へ追加")
+            after_action = menu.addAction("面を後へ追加")
+            duplicate_surface_action = menu.addAction("面を複製")
+            delete_surface_action = menu.addAction("面を削除")
+            menu.addSeparator()
+            plane_action = menu.addAction("平面 / 球面を切替")
+            lock_radius_action = menu.addAction("曲率固定を切替")
+            before_action.triggered.connect(lambda: self.surfaceActionRequested.emit("surface_insert_before", element_index, surface_index))
+            after_action.triggered.connect(lambda: self.surfaceActionRequested.emit("surface_insert_after", element_index, surface_index))
+            duplicate_surface_action.triggered.connect(lambda: self.surfaceActionRequested.emit("surface_duplicate", element_index, surface_index))
+            delete_surface_action.triggered.connect(lambda: self.surfaceActionRequested.emit("surface_delete", element_index, surface_index))
+            plane_action.triggered.connect(lambda: self.surfaceActionRequested.emit("surface_toggle_plane", element_index, surface_index))
+            lock_radius_action.triggered.connect(lambda: self.surfaceActionRequested.emit("surface_toggle_radius_lock", element_index, surface_index))
+            menu.addSeparator()
+
+        duplicate_action = menu.addAction("レンズを複製")
         reverse_action = menu.addAction("レンズを反転")
+        stop_action = menu.addAction("この面を絞り位置にする" if kind == "surface" else "後方を絞り位置にする")
         customize_action = None
         if self._design is not None and self._design.elements[element_index].is_catalog:
             customize_action = menu.addAction("カスタム化")
         menu.addSeparator()
+        insert_before_action = menu.addAction("カスタムレンズを前へ挿入")
+        insert_after_action = menu.addAction("カスタムレンズを後へ挿入")
+        menu.addSeparator()
         delete_action = menu.addAction("レンズを削除")
-        chosen = menu.exec(event.globalPos())
-        if chosen is reverse_action:
-            self.elementActionRequested.emit("reverse", element_index)
-        elif chosen is customize_action:
-            self.elementActionRequested.emit("customize", element_index)
-        elif chosen is delete_action:
-            self.elementActionRequested.emit("delete", element_index)
+        duplicate_action.triggered.connect(lambda: self.surfaceActionRequested.emit("element_duplicate", element_index, surface_index))
+        reverse_action.triggered.connect(lambda: self.elementActionRequested.emit("reverse", element_index))
+        stop_target = surface_index if kind == "surface" else -1
+        stop_action.triggered.connect(lambda: self.surfaceActionRequested.emit("set_stop", element_index, stop_target))
+        if customize_action is not None:
+            customize_action.triggered.connect(lambda: self.elementActionRequested.emit("customize", element_index))
+        insert_before_action.triggered.connect(lambda: self.insertionRequested.emit("custom", element_index))
+        insert_after_action.triggered.connect(lambda: self.insertionRequested.emit("custom", element_index + 1))
+        delete_action.triggered.connect(lambda: self.elementActionRequested.emit("delete", element_index))
+        self._show_context_menu(menu, event.globalPos())
+
+    def _show_context_menu(self, menu: QMenu, global_position) -> None:
+        if self._context_menu is not None:
+            previous_menu = self._context_menu
+            self._context_menu = None
+            previous_menu.close()
+            previous_menu.deleteLater()
+        self._context_menu = menu
+        menu.aboutToHide.connect(lambda current=menu: self._context_menu_closed(current))
+        menu.popup(global_position)
+
+    def _context_menu_closed(self, menu: QMenu) -> None:
+        if self._context_menu is menu:
+            self._context_menu = None
+        menu.deleteLater()
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Delete and self._selected is not None and self._selected[0] in {"element", "surface"}:
@@ -386,10 +456,51 @@ class LensLayoutView(QGraphicsView):
         super().keyPressEvent(event)
 
     def _interactive_item_at(self, position):
-        for item in self.items(position):
-            if item.data(ROLE_KIND) in {"surface", "element", "gap"}:
+        items_here = self.items(position)
+        for item in items_here:
+            if item.data(ROLE_KIND) == "gap" and item.zValue() >= 5:
+                return item
+        for item in items_here:
+            if item.data(ROLE_KIND) == "element" and item.zValue() >= 5:
+                return item
+
+        nearest_surface = None
+        nearest_distance = float("inf")
+        for item in self.scene().items():
+            if item.data(ROLE_KIND) != "surface" or item.zValue() != 7 or not isinstance(item, QGraphicsPathItem):
+                continue
+            distance = self._path_distance_in_view(item, position)
+            if distance < nearest_distance:
+                nearest_surface = item
+                nearest_distance = distance
+        if nearest_surface is not None and nearest_distance <= 7.0:
+            return nearest_surface
+
+        for item in items_here:
+            if item.data(ROLE_KIND) == "element":
+                return item
+        for item in items_here:
+            if item.data(ROLE_KIND) == "gap":
                 return item
         return None
+
+    def _path_distance_in_view(self, item: QGraphicsPathItem, position) -> float:
+        shortest = float("inf")
+        for polygon in item.path().toSubpathPolygons():
+            points = [self.mapFromScene(item.mapToScene(point)) for point in polygon]
+            for start, end in zip(points, points[1:]):
+                dx = end.x() - start.x()
+                dy = end.y() - start.y()
+                if dx == 0 and dy == 0:
+                    distance = hypot(position.x() - start.x(), position.y() - start.y())
+                else:
+                    ratio = ((position.x() - start.x()) * dx + (position.y() - start.y()) * dy) / (dx * dx + dy * dy)
+                    ratio = min(max(ratio, 0.0), 1.0)
+                    closest_x = start.x() + ratio * dx
+                    closest_y = start.y() + ratio * dy
+                    distance = hypot(position.x() - closest_x, position.y() - closest_y)
+                shortest = min(shortest, distance)
+        return shortest
 
     def wheelEvent(self, event) -> None:
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15

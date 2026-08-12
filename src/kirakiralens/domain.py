@@ -17,10 +17,16 @@ class SurfaceSpec:
     thickness_after_mm: float = 0.0
     clear_aperture_mm: float | None = None
     coating: str = ""
+    surface_type: str = "standard"
+    conic: float = 0.0
+    asphere_coefficients: list[float] = field(default_factory=list)
+    comment: str = ""
     radius_locked: bool = False
     thickness_locked: bool = False
     material_locked: bool = False
     clear_aperture_locked: bool = False
+    conic_locked: bool = False
+    asphere_locked: bool = False
 
     @property
     def is_plane(self) -> bool:
@@ -73,10 +79,16 @@ class LensElement:
                     thickness_after_mm=0.0 if is_last else list(reversed(internal_thicknesses))[index],
                     clear_aperture_mm=source.clear_aperture_mm,
                     coating=source.coating,
+                    surface_type=source.surface_type,
+                    conic=source.conic,
+                    asphere_coefficients=[-coefficient for coefficient in source.asphere_coefficients],
+                    comment=source.comment,
                     radius_locked=source.radius_locked,
                     thickness_locked=source.thickness_locked,
                     material_locked=source.material_locked,
                     clear_aperture_locked=source.clear_aperture_locked,
+                    conic_locked=source.conic_locked,
+                    asphere_locked=source.asphere_locked,
                 )
             )
         self.surfaces = reversed_surfaces
@@ -117,6 +129,7 @@ class OpticalDesign:
     settings: DesignSettings = field(default_factory=DesignSettings)
     elements: list[LensElement] = field(default_factory=list)
     stop_after_element: int = 0
+    stop_surface_index: int | None = None
     schema_version: int = 1
 
     @classmethod
@@ -176,6 +189,9 @@ class OpticalDesign:
             settings=DesignSettings(**settings_data),
             elements=[lens_element_from_dict(item) for item in data.get("elements", [])],
             stop_after_element=int(data.get("stop_after_element", 0)),
+            stop_surface_index=(
+                None if data.get("stop_surface_index") is None else int(data["stop_surface_index"])
+            ),
             schema_version=int(data.get("schema_version", 1)),
         )
 

@@ -42,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
         QPushButton:hover { border-color: #2b776d; background: #edf5f2; }
         QPushButton:pressed { background: #dcece6; }
         QPushButton:disabled { color: #8c9692; background: #eef1f0; }
+        QFrame#diagramEditor { background: #edf2ef; border: 0; border-bottom: 1px solid #cbd5d1; }
         QHeaderView::section { background: #e3e9e6; border: none; border-right: 1px solid #cbd5d1; padding: 5px; }
         QGroupBox { border-top: 1px solid #cbd5d1; margin-top: 10px; padding-top: 9px; font-weight: 600; }
         QGroupBox::title { subcontrol-origin: margin; left: 5px; padding: 0 4px; }
