@@ -6,6 +6,7 @@ from typing import Any, Callable
 import numpy as np
 
 from ..domain import OpticalDesign
+from .configuration import resolved_field_angles, sensor_angle_of_view
 from .optiland_adapter import OptilandAdapter
 
 
@@ -16,26 +17,41 @@ QUALITY_PRESETS = {
 }
 
 
-def normalized_options(options: dict[str, Any] | None = None) -> dict[str, Any]:
+def normalized_options(options: dict[str, Any] | None = None, design: OpticalDesign | None = None) -> dict[str, Any]:
     source = options or {}
     quality = str(source.get("quality", "standard"))
-    if quality not in QUALITY_PRESETS:
+    if quality == "design" and design is not None:
+        values = {
+            "spot_rings": design.settings.spot_ring_count,
+            "ray_points": design.settings.ray_fan_point_count,
+            "curve_points": design.settings.analysis_curve_point_count,
+            "longitudinal_points": design.settings.analysis_curve_point_count,
+        }
+    else:
+        if quality not in QUALITY_PRESETS:
+            quality = "standard"
+        values = dict(QUALITY_PRESETS[quality])
+    if quality not in {*QUALITY_PRESETS, "design"}:
         quality = "standard"
     maximum_frequency = min(max(float(source.get("max_frequency_lp_mm", 80.0)), 20.0), 400.0)
-    values = dict(QUALITY_PRESETS[quality])
+    for key in ("spot_rings", "ray_points", "curve_points", "longitudinal_points"):
+        if key in source:
+            values[key] = int(source[key])
     values.update({"quality": quality, "max_frequency_lp_mm": maximum_frequency})
     return values
 
 
 def evaluate_performance(design: OpticalDesign, options: dict[str, Any] | None = None) -> dict[str, Any]:
-    resolved = normalized_options(options)
+    resolved = normalized_options(options, design)
     result: dict[str, Any] = {
         "valid": False,
         "engine": "Optiland",
-        "method": "Equal-weight polychromatic geometric OTF with diffraction transfer",
+        "method": "Weighted polychromatic geometric OTF with diffraction transfer",
         "options": resolved,
         "fields": [],
         "wavelengths_um": list(design.settings.wavelengths_um),
+        "wavelength_weights": list(design.settings.wavelength_weights),
+        "angle_of_view": sensor_angle_of_view(design.settings),
         "mtf": {},
         "spots": {},
         "ray_fan": {},
@@ -56,8 +72,15 @@ def evaluate_performance(design: OpticalDesign, options: dict[str, Any] | None =
         result["engine"] = f"Optiland {getattr(optiland, '__version__', 'unknown')}"
         fields = [tuple(map(float, field)) for field in system.fields.get_field_coords()]
         wavelengths = [float(value) for value in system.wavelengths.get_wavelengths()]
+        field_angles = resolved_field_angles(design.settings)
+        result["angle_of_view"] = sensor_angle_of_view(design.settings, float(system.paraxial.f2()))
         result["fields"] = [
-            {"index": index, "fraction": float(field[1]), "label": _field_label(float(field[1]))}
+            {
+                "index": index,
+                "fraction": float(field[1]),
+                "angle_deg": field_angles[index],
+                "label": _field_label(float(field[1]), field_angles[index]),
+            }
             for index, field in enumerate(fields)
         ]
         result["wavelengths_um"] = wavelengths
@@ -82,6 +105,8 @@ def evaluate_performance(design: OpticalDesign, options: dict[str, Any] | None =
             int(resolved["spot_rings"]),
             float(resolved["max_frequency_lp_mm"]),
             int(resolved["curve_points"]),
+            design.settings.wavelength_weights,
+            field_angles,
         ),
     )
     if spot_analysis:
@@ -89,7 +114,7 @@ def evaluate_performance(design: OpticalDesign, options: dict[str, Any] | None =
 
     result["ray_fan"] = run(
         "Transverse ray aberration",
-        lambda: _ray_fan(system, fields, wavelengths, int(resolved["ray_points"])),
+        lambda: _ray_fan(system, fields, wavelengths, int(resolved["ray_points"]), field_angles),
     ) or {}
     result["longitudinal"] = run(
         "Longitudinal aberration",
@@ -113,7 +138,17 @@ def evaluate_performance(design: OpticalDesign, options: dict[str, Any] | None =
     return result
 
 
-def _spot_and_mtf(system, fields, wavelengths, primary_wavelength, rings, max_frequency, curve_points):
+def _spot_and_mtf(
+    system,
+    fields,
+    wavelengths,
+    primary_wavelength,
+    rings,
+    max_frequency,
+    curve_points,
+    wavelength_weights,
+    field_angles,
+):
     from optiland.analysis import SpotDiagram
 
     analysis = SpotDiagram(
@@ -129,6 +164,8 @@ def _spot_and_mtf(system, fields, wavelengths, primary_wavelength, rings, max_fr
     frequencies = np.array(sorted(set(base_frequencies.tolist() + [10.0, 20.0, 40.0])))
     frequencies = frequencies[frequencies <= max_frequency]
     f_number = abs(float(system.paraxial.FNO()))
+    spectral_weights = np.asarray((wavelength_weights + [1.0] * len(wavelengths))[: len(wavelengths)], dtype=float)
+    spectral_weights = _normalized_weights(spectral_weights)
     spot_fields = []
     mtf_fields = []
 
@@ -143,15 +180,15 @@ def _spot_and_mtf(system, fields, wavelengths, primary_wavelength, rings, max_fr
         all_y: list[np.ndarray] = []
         all_weights: list[np.ndarray] = []
 
-        for wavelength, wave_data in zip(wavelengths, field_data, strict=True):
+        for spectral_weight, wavelength, wave_data in zip(spectral_weights, wavelengths, field_data, strict=True):
             x, y, intensity = _valid_rays(wave_data.x, wave_data.y, wave_data.intensity)
             x = x - center_x
             y = y - center_y
-            weights = _normalized_weights(intensity) / len(wavelengths)
+            weights = _normalized_weights(intensity) * spectral_weight
             all_x.append(x)
             all_y.append(y)
             all_weights.append(weights)
-            wavelength_samples.append((wavelength, x, y, weights))
+            wavelength_samples.append((wavelength, x, y, weights, spectral_weight))
             series.append(
                 {
                     "wavelength_um": wavelength,
@@ -169,7 +206,8 @@ def _spot_and_mtf(system, fields, wavelengths, primary_wavelength, rings, max_fr
         spot_fields.append(
             {
                 "field": float(fields[field_index][1]),
-                "label": _field_label(float(fields[field_index][1])),
+                "angle_deg": field_angles[field_index],
+                "label": _field_label(float(fields[field_index][1]), field_angles[field_index]),
                 "rms_um": rms_um,
                 "r80_um": r80_um,
                 "series": series,
@@ -178,16 +216,18 @@ def _spot_and_mtf(system, fields, wavelengths, primary_wavelength, rings, max_fr
 
         tangential_complex = np.zeros(len(frequencies), dtype=complex)
         sagittal_complex = np.zeros(len(frequencies), dtype=complex)
-        for wavelength, x, y, weights in wavelength_samples:
+        for wavelength, x, y, weights, spectral_weight in wavelength_samples:
             diffraction = _diffraction_mtf(frequencies, wavelength, f_number)
-            tangential_complex += _geometric_otf(y, weights, frequencies) * diffraction / len(wavelengths)
-            sagittal_complex += _geometric_otf(x, weights, frequencies) * diffraction / len(wavelengths)
+            normalized_ray_weights = _normalized_weights(weights)
+            tangential_complex += _geometric_otf(y, normalized_ray_weights, frequencies) * diffraction * spectral_weight
+            sagittal_complex += _geometric_otf(x, normalized_ray_weights, frequencies) * diffraction * spectral_weight
         tangential = np.abs(tangential_complex)
         sagittal = np.abs(sagittal_complex)
         mtf_fields.append(
             {
                 "field": float(fields[field_index][1]),
-                "label": _field_label(float(fields[field_index][1])),
+                "angle_deg": field_angles[field_index],
+                "label": _field_label(float(fields[field_index][1]), field_angles[field_index]),
                 "tangential": _float_list(tangential),
                 "sagittal": _float_list(sagittal),
                 "at": {
@@ -209,17 +249,17 @@ def _spot_and_mtf(system, fields, wavelengths, primary_wavelength, rings, max_fr
         {
             "frequencies_lp_mm": _float_list(frequencies),
             "fields": mtf_fields,
-            "spectral_weighting": "equal",
+            "spectral_weighting": "user weights (normalized)",
         },
     )
 
 
-def _ray_fan(system, fields, wavelengths, num_points):
+def _ray_fan(system, fields, wavelengths, num_points, field_angles):
     from optiland.analysis import RayFan
 
     analysis = RayFan(system, fields=fields, wavelengths=wavelengths, num_points=num_points)
     output_fields = []
-    for field in fields:
+    for field_index, field in enumerate(fields):
         data = analysis.data[f"{field}"]
         tangential = []
         sagittal = []
@@ -243,7 +283,8 @@ def _ray_fan(system, fields, wavelengths, num_points):
         output_fields.append(
             {
                 "field": float(field[1]),
-                "label": _field_label(float(field[1])),
+                "angle_deg": field_angles[field_index],
+                "label": _field_label(float(field[1]), field_angles[field_index]),
                 "tangential": tangential,
                 "sagittal": sagittal,
                 "rms_um": float(np.sqrt(np.mean(all_errors**2))),
@@ -438,9 +479,10 @@ def _last_finite(values: list[float | None]) -> float | None:
     return None
 
 
-def _field_label(fraction: float) -> str:
+def _field_label(fraction: float, angle_deg: float | None = None) -> str:
+    angle = "" if angle_deg is None else f" / {angle_deg:.2f}°"
     if abs(fraction) < 1e-6:
-        return "中心"
+        return f"中心{angle}"
     if abs(fraction - 1.0) < 1e-6:
-        return "隅"
-    return f"像高 {fraction:.0%}"
+        return f"隅{angle}"
+    return f"像高 {fraction:.0%}{angle}"

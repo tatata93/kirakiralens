@@ -17,8 +17,11 @@ def test_starter_prescription_matches_initial_targets(monkeypatch, tmp_path: Pat
     assert abs(result.effective_focal_length_mm - 50.0) < 0.01
     assert abs(result.back_focal_length_mm - 45.46) < 0.01
     rays = trace_parallel_rays(design, result.refractive_indices)
-    assert len(rays) == 5
-    assert all(len(ray) == 7 for ray in rays)
+    assert len(rays) == design.settings.layout_ray_count * len(design.settings.field_fractions)
+    assert all(len(ray.points) == 7 for ray in rays)
+    assert {ray.field_index for ray in rays} == {0, 1, 2}
+    assert result.angle_of_view_diagonal_deg is not None
+    assert 46.0 < result.angle_of_view_diagonal_deg < 47.0
 
 
 def test_even_asphere_is_passed_to_optiland(monkeypatch, tmp_path: Path) -> None:
@@ -38,3 +41,18 @@ def test_even_asphere_is_passed_to_optiland(monkeypatch, tmp_path: Path) -> None
     assert result.valid, result.error
     assert result.effective_focal_length_mm is not None
     assert system.surface_group.stop_index == 1
+
+
+def test_configured_fields_wavelengths_and_weights_reach_optiland(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    design = OpticalDesign.starter()
+    design.settings.field_mode = "angles"
+    design.settings.field_angles_deg = [0.0, 12.5, 24.0]
+    design.settings.wavelengths_um = [0.48613, 0.58756, 0.65627]
+    design.settings.wavelength_weights = [0.5, 2.0, 1.5]
+
+    system = OptilandAdapter().to_optic(design)
+
+    assert list(system.fields.y_fields) == [0.0, 12.5, 24.0]
+    assert list(system.wavelengths.get_wavelengths()) == design.settings.wavelengths_um
+    assert [wavelength.weight for wavelength in system.wavelengths.wavelengths] == [0.5, 2.0, 1.5]

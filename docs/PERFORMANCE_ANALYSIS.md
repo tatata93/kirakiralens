@@ -9,10 +9,10 @@ an unchanged design with unchanged analysis settings reuses the previous result.
 
 ## Implemented analyses
 
-All field plots use the full-frame diagonal at normalized field coordinates
-0.0, 0.7, and 1.0 (center, intermediate image height, and corner). The default
-spectral samples are F, d, and C lines at 0.4861, 0.5876, and 0.6563 µm with
-equal weights.
+Field plots use either configurable fractions of the selected sensor's diagonal
+field or user-entered half-angles. Every field label includes its actual angle.
+The default spectral samples are Fraunhofer F, d, and C lines at 0.48613,
+0.58756, and 0.65627 µm. Wavelength and field weights are editable.
 
 - **MTF versus spatial frequency:** tangential and sagittal curves in lp/mm,
   with explicit values at 10, 20, and 40 lp/mm. The implementation forms the
@@ -34,6 +34,8 @@ equal weights.
   over normalized field, calculated by Optiland's parabasal-ray analysis.
 - **Distortion:** f-tan distortion in percent over normalized field for every
   wavelength.
+- **Image geometry:** the result stores and displays horizontal, vertical, and
+  diagonal angle of view calculated from the configured sensor and actual EFL.
 
 The result dictionary contains a `summary.merit_metrics` section with stable
 keys for the future optimizer: `mtf40_min`, `corner_rms_spot_um`,
@@ -65,8 +67,8 @@ Primary references:
 
 ## Current limits
 
-- Spectral weights are equal; illuminant, sensor quantum efficiency, and custom
-  wavelength weights are not yet editable.
+- Wavelength weights are relative user inputs; illuminant spectra and sensor
+  quantum-efficiency curves are not yet imported automatically.
 - The MTF is a nominal hybrid geometric-diffraction prediction. Manufacturing
   tolerances, decenter, tilt, flare, scattering, sensor stack, and sampling are
   not included.

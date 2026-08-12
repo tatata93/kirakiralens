@@ -46,7 +46,7 @@ class PerformanceController(QObject):
         self._timeout.timeout.connect(self._request_timed_out)
 
     def submit(self, generation: int, design: OpticalDesign, options: dict) -> None:
-        resolved = normalized_options(options)
+        resolved = normalized_options(options, design)
         signature = analysis_signature(design, resolved)
         if signature in self._cache:
             result = self._cache[signature]

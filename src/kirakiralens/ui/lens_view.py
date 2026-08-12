@@ -31,6 +31,7 @@ class LensLayoutView(QGraphicsView):
     gapChangeRequested = Signal(int, float)
     elementActionRequested = Signal(str, int)
     surfaceActionRequested = Signal(str, int, int)
+    imageEditRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -78,7 +79,10 @@ class LensLayoutView(QGraphicsView):
             return
 
         geometry, image_z = self._geometry(design)
-        maximum_radius = max(element.outer_diameter_mm / 2 for element in design.elements)
+        maximum_radius = max(
+            max(element.outer_diameter_mm / 2 for element in design.elements),
+            design.settings.sensor_height_mm / 2,
+        )
         vertical_margin = max(12.0, maximum_radius * 0.8)
         scene.setSceneRect(QRectF(-14, -maximum_radius - vertical_margin, image_z + 24, 2 * (maximum_radius + vertical_margin)))
 
@@ -201,11 +205,44 @@ class LensLayoutView(QGraphicsView):
 
         image_pen = QPen(QColor("#276b62"), 0.8)
         image_pen.setCosmetic(True)
-        scene.addLine(image_z, -design.settings.sensor_height_mm / 2, image_z, design.settings.sensor_height_mm / 2, image_pen)
+        image_item = scene.addLine(
+            image_z,
+            -design.settings.sensor_height_mm / 2,
+            image_z,
+            design.settings.sensor_height_mm / 2,
+            image_pen,
+        )
+        image_item.setData(ROLE_KIND, "image")
+        image_item.setData(ROLE_ELEMENT, -1)
+        image_item.setData(ROLE_SURFACE, -1)
+        image_item.setToolTip(
+            f"像面 {design.settings.sensor_width_mm:.2f} x {design.settings.sensor_height_mm:.2f} mm\n"
+            "クリックして像面・光線条件を編集"
+        )
+        image_item.setCursor(Qt.CursorShape.PointingHandCursor)
+        image_item.setZValue(8)
+        image_hit = QGraphicsRectItem(
+            QRectF(image_z - 1.2, -design.settings.sensor_height_mm / 2 - 1.2, 2.4, design.settings.sensor_height_mm + 2.4)
+        )
+        image_hit.setPen(QPen(Qt.PenStyle.NoPen))
+        image_hit.setBrush(QColor(0, 0, 0, 1))
+        image_hit.setData(ROLE_KIND, "image")
+        image_hit.setData(ROLE_ELEMENT, -1)
+        image_hit.setData(ROLE_SURFACE, -1)
+        image_hit.setToolTip(image_item.toolTip())
+        image_hit.setCursor(Qt.CursorShape.PointingHandCursor)
+        image_hit.setZValue(7)
+        scene.addItem(image_hit)
         image_label = QGraphicsSimpleTextItem("IMAGE")
         image_label.setBrush(QColor("#276b62"))
         image_label.setScale(0.2)
         image_label.setPos(image_z - 2.0, -design.settings.sensor_height_mm / 2 - 4.5)
+        image_label.setData(ROLE_KIND, "image")
+        image_label.setData(ROLE_ELEMENT, -1)
+        image_label.setData(ROLE_SURFACE, -1)
+        image_label.setToolTip(image_item.toolTip())
+        image_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        image_label.setZValue(8)
         scene.addItem(image_label)
         self._draw_back_focus_dimension(design, geometry[-1][-1], image_z, maximum_radius + 7)
 
@@ -216,16 +253,17 @@ class LensLayoutView(QGraphicsView):
     def _draw_rays(self, design: OpticalDesign) -> None:
         if self._analysis is None or not self._analysis.valid:
             return
-        ray_colors = ["#b3423f", "#d28b19", "#276b62", "#386fa4", "#7a4d8b"]
-        for color, ray in zip(ray_colors, trace_parallel_rays(design, self._analysis.refractive_indices), strict=False):
-            if len(ray) < 2:
+        ray_colors = ["#b3423f", "#276b62", "#386fa4", "#7a4d8b", "#d28b19"]
+        for ray in trace_parallel_rays(design, self._analysis.refractive_indices):
+            if len(ray.points) < 2:
                 continue
-            path = QPainterPath(QPointF(ray[0].z_mm, ray[0].y_mm))
-            for point in ray[1:]:
+            path = QPainterPath(QPointF(ray.points[0].z_mm, ray.points[0].y_mm))
+            for point in ray.points[1:]:
                 path.lineTo(point.z_mm, point.y_mm)
             item = QGraphicsPathItem(path)
-            pen = QPen(QColor(color), 0)
+            pen = QPen(QColor(ray_colors[ray.field_index % len(ray_colors)]), 0)
             pen.setCosmetic(True)
+            pen.setColor(QColor(pen.color().red(), pen.color().green(), pen.color().blue(), 155))
             item.setPen(pen)
             item.setZValue(3)
             self.scene().addItem(item)
@@ -433,6 +471,10 @@ class LensLayoutView(QGraphicsView):
                     self._show_front_insertion_menu(event.globalPosition().toPoint())
                     event.accept()
                     return
+                if kind == "image":
+                    self.imageEditRequested.emit()
+                    event.accept()
+                    return
                 self.selectionRequested.emit(kind, element, surface)
                 if kind == "gap" and self._design is not None and not self._design.elements[element].gap_locked:
                     self._gap_drag = (element, self._design.elements[element].gap_after_mm, self.mapToScene(event.position().toPoint()).x())
@@ -476,6 +518,13 @@ class LensLayoutView(QGraphicsView):
         surface_index = int(item.data(ROLE_SURFACE))
         if kind == "front_gap":
             self._show_front_insertion_menu(event.globalPos())
+            return
+
+        if kind == "image":
+            menu = QMenu(self)
+            edit_action = menu.addAction("像面・光線条件を編集")
+            edit_action.triggered.connect(self.imageEditRequested)
+            self._show_context_menu(menu, event.globalPos())
             return
 
         menu = QMenu(self)
@@ -565,6 +614,9 @@ class LensLayoutView(QGraphicsView):
 
     def _interactive_item_at(self, position):
         items_here = self.items(position)
+        for item in items_here:
+            if item.data(ROLE_KIND) == "image":
+                return item
         if self.mapToScene(position).x() < -0.5:
             for item in items_here:
                 if item.data(ROLE_KIND) == "front_gap":

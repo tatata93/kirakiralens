@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from ..domain import OpticalDesign
 from ..optics.performance import normalized_options
-from ..optics.signature import analysis_signature
+from ..optics.signature import design_signature
 from .performance_controller import PerformanceController
 from .plot_widgets import PlotWidget
 
@@ -39,7 +39,7 @@ class PerformanceWindow(QMainWindow):
     def __init__(self, design: OpticalDesign, repository_root: Path, parent=None):
         super().__init__(parent)
         self.design = deepcopy(design)
-        self._design_signature = analysis_signature(self.design)
+        self._design_signature = design_signature(self.design)
         self._generation = 0
         self._running = False
         self._result: dict | None = None
@@ -61,10 +61,11 @@ class PerformanceWindow(QMainWindow):
         controls = QHBoxLayout()
         controls.addWidget(QLabel("解析品質"))
         self.quality = QComboBox()
+        self.quality.addItem("設計設定", "design")
         self.quality.addItem("プレビュー", "preview")
         self.quality.addItem("標準", "standard")
         self.quality.addItem("高精度", "high")
-        self.quality.setCurrentIndex(1)
+        self.quality.setCurrentIndex(0)
         controls.addWidget(self.quality)
         controls.addWidget(QLabel("MTF上限"))
         self.maximum_frequency = QDoubleSpinBox()
@@ -90,6 +91,9 @@ class PerformanceWindow(QMainWindow):
         self.status_label = QLabel("未解析。設計変更だけでは性能計算を開始しません")
         controls.addWidget(self.status_label)
         layout.addLayout(controls)
+        self.angle_label = QLabel("")
+        self.angle_label.setStyleSheet("color: #59625f;")
+        layout.addWidget(self.angle_label)
 
         self.tabs = QTabWidget()
         self._build_summary_tab()
@@ -155,28 +159,21 @@ class PerformanceWindow(QMainWindow):
         self.tabs.addTab(self.mtf_plot, "MTF")
 
     def _build_spot_tab(self) -> None:
-        page = QWidget()
-        layout = QHBoxLayout(page)
-        self.spot_plots = [PlotWidget(scatter=True, equal_axes=True) for _ in range(3)]
-        for plot in self.spot_plots:
-            layout.addWidget(plot, 1)
-        self.tabs.addTab(page, "スポット")
-
-    def _build_ray_fan_tab(self) -> None:
-        content = QWidget()
-        grid = QGridLayout(content)
-        self.ray_plots: list[tuple[PlotWidget, PlotWidget]] = []
-        for field_index in range(3):
-            tangential = PlotWidget()
-            sagittal = PlotWidget()
-            tangential.setMinimumHeight(250)
-            sagittal.setMinimumHeight(250)
-            grid.addWidget(tangential, field_index, 0)
-            grid.addWidget(sagittal, field_index, 1)
-            self.ray_plots.append((tangential, sagittal))
+        self.spot_content = QWidget()
+        self.spot_layout = QHBoxLayout(self.spot_content)
+        self.spot_plots: list[PlotWidget] = []
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setWidget(content)
+        scroll.setWidget(self.spot_content)
+        self.tabs.addTab(scroll, "スポット")
+
+    def _build_ray_fan_tab(self) -> None:
+        self.ray_content = QWidget()
+        self.ray_grid = QGridLayout(self.ray_content)
+        self.ray_plots: list[tuple[PlotWidget, PlotWidget]] = []
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.ray_content)
         self.tabs.addTab(scroll, "横収差")
 
     def _build_longitudinal_tab(self) -> None:
@@ -193,7 +190,7 @@ class PerformanceWindow(QMainWindow):
         self.tabs.addTab(page, "像面・歪曲")
 
     def set_design(self, design: OpticalDesign) -> None:
-        signature = analysis_signature(design)
+        signature = design_signature(design)
         if signature == self._design_signature:
             return
         self.design = deepcopy(design)
@@ -210,7 +207,7 @@ class PerformanceWindow(QMainWindow):
             "quality": self.quality.currentData(),
             "max_frequency_lp_mm": self.maximum_frequency.value(),
         }
-        self._controller.submit(self._generation, self.design, normalized_options(options))
+        self._controller.submit(self._generation, self.design, normalized_options(options, self.design))
 
     @Slot(int, object)
     def _analysis_finished(self, generation: int, result: dict) -> None:
@@ -238,6 +235,12 @@ class PerformanceWindow(QMainWindow):
         self.status_label.setText(message)
 
     def _render_result(self, result: dict) -> None:
+        angles = result.get("angle_of_view", {})
+        self.angle_label.setText(
+            f"像面 {self.design.settings.sensor_width_mm:.2f} x {self.design.settings.sensor_height_mm:.2f} mm / "
+            f"画角 横 {angles.get('horizontal_deg', 0):.2f}°  縦 {angles.get('vertical_deg', 0):.2f}°  "
+            f"対角 {angles.get('diagonal_deg', 0):.2f}°"
+        )
         self._render_summary(result)
         self._render_mtf(result.get("mtf", {}))
         self._render_spots(result.get("spots", {}))
@@ -299,6 +302,7 @@ class PerformanceWindow(QMainWindow):
 
     def _render_spots(self, spots: dict) -> None:
         airy_radius = spots.get("airy_radius_um")
+        self._ensure_spot_plots(len(spots.get("fields", [])))
         for plot_index, plot in enumerate(self.spot_plots):
             fields = spots.get("fields", [])
             if plot_index >= len(fields):
@@ -319,6 +323,7 @@ class PerformanceWindow(QMainWindow):
 
     def _render_ray_fan(self, ray_fan: dict) -> None:
         fields = ray_fan.get("fields", [])
+        self._ensure_ray_plots(len(fields))
         for field_index, (tangential_plot, sagittal_plot) in enumerate(self.ray_plots):
             if field_index >= len(fields):
                 tangential_plot.set_plot("横収差 T", "瞳座標", "光線誤差 [µm]", [])
@@ -345,6 +350,33 @@ class PerformanceWindow(QMainWindow):
                     series,
                     (-1, 1),
                 )
+
+    def _ensure_spot_plots(self, count: int) -> None:
+        while len(self.spot_plots) < count:
+            plot = PlotWidget(scatter=True, equal_axes=True)
+            plot.setMinimumWidth(300)
+            self.spot_layout.addWidget(plot, 1)
+            self.spot_plots.append(plot)
+        while len(self.spot_plots) > count:
+            plot = self.spot_plots.pop()
+            self.spot_layout.removeWidget(plot)
+            plot.deleteLater()
+
+    def _ensure_ray_plots(self, count: int) -> None:
+        while len(self.ray_plots) < count:
+            row = len(self.ray_plots)
+            tangential = PlotWidget()
+            sagittal = PlotWidget()
+            tangential.setMinimumHeight(250)
+            sagittal.setMinimumHeight(250)
+            self.ray_grid.addWidget(tangential, row, 0)
+            self.ray_grid.addWidget(sagittal, row, 1)
+            self.ray_plots.append((tangential, sagittal))
+        while len(self.ray_plots) > count:
+            tangential, sagittal = self.ray_plots.pop()
+            for plot in (tangential, sagittal):
+                self.ray_grid.removeWidget(plot)
+                plot.deleteLater()
 
     def _render_longitudinal(self, longitudinal: dict) -> None:
         pupil = longitudinal.get("pupil", [])

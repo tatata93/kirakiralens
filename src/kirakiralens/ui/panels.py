@@ -414,6 +414,7 @@ class InspectorPanel(QWidget):
         self.fno = QLabel("-")
         self.epd = QLabel("-")
         self.track = QLabel("-")
+        self.angle = QLabel("-")
         self.analysis_status = QLabel("")
         self.analysis_status.setWordWrap(True)
         analysis_form.addRow("エンジン", self.engine)
@@ -422,6 +423,7 @@ class InspectorPanel(QWidget):
         analysis_form.addRow("F値", self.fno)
         analysis_form.addRow("入射瞳径", self.epd)
         analysis_form.addRow("全長", self.track)
+        analysis_form.addRow("画角 横 / 縦 / 対角", self.angle)
         analysis_form.addRow(self.analysis_status)
         layout.addWidget(analysis_group)
         layout.addStretch(1)
@@ -461,10 +463,15 @@ class InspectorPanel(QWidget):
             self.fno.setText(f"F/{result.image_f_number:.3g}")
             self.epd.setText(f"{result.entrance_pupil_diameter_mm:.3f} mm")
             self.track.setText(f"{result.total_track_mm:.3f} mm")
+            self.angle.setText(
+                f"{result.angle_of_view_horizontal_deg:.2f}° / "
+                f"{result.angle_of_view_vertical_deg:.2f}° / "
+                f"{result.angle_of_view_diagonal_deg:.2f}°"
+            )
             self.analysis_status.setText("; ".join(result.warnings))
             self.analysis_status.setStyleSheet("color: #8a5a13;")
         else:
-            for label in (self.efl, self.bfl, self.fno, self.epd, self.track):
+            for label in (self.efl, self.bfl, self.fno, self.epd, self.track, self.angle):
                 label.setText("-")
             self.analysis_status.setText(result.error)
             self.analysis_status.setStyleSheet("color: #a13d3a;")

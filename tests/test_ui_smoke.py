@@ -145,6 +145,34 @@ def test_main_window_constructs_with_generated_catalog() -> None:
     assert window.catalog_panel.min_diameter.maximum() == 10000
     assert window.inspector.diameter.maximum() == 10000
     assert window.surface_dock.isHidden()
+    image_item = next(item for item in window.lens_view.scene().items() if item.data(0) == "image")
+    image_position = window.lens_view.mapFromScene(image_item.sceneBoundingRect().center())
+    image_event = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        QPointF(image_position),
+        QPointF(window.lens_view.mapToGlobal(image_position)),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    window.lens_view.mousePressEvent(image_event)
+    application.processEvents()
+    assert window._system_settings_window is not None
+    settings_window = window._system_settings_window
+    settings_window.sensor_preset.setCurrentIndex(settings_window.sensor_preset.findData("aps_c"))
+    settings_window.layout_rays.setValue(9)
+    settings_window.apply()
+    application.processEvents()
+    assert window.design.settings.sensor_width_mm == 23.5
+    assert window.design.settings.sensor_height_mm == 15.6
+    assert window.design.settings.layout_ray_count == 9
+
+    window.undo()
+    application.processEvents()
+    assert window.design.settings.sensor_width_mm == 36.0
+    window.redo()
+    application.processEvents()
+    assert window.design.settings.sensor_width_mm == 23.5
     window.close()
     application.processEvents()
 

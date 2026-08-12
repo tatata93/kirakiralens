@@ -46,6 +46,12 @@ class MainWindow(QMainWindow):
         self.selected_kind = "surface"
         self._selected_catalog_product: int | None = None
         self._performance_window = None
+        self._system_settings_window = None
+        self._automatic_design_window = None
+        self._undo_stack: list[dict] = []
+        self._redo_stack: list[dict] = []
+        self._restoring_history = False
+        self._last_committed_design = deepcopy(self.design.to_dict())
         self._analysis_generation = 0
         self._design_signature = design_signature(self.design)
         self._analysis_signature = analysis_signature(self.design)
@@ -78,18 +84,35 @@ class MainWindow(QMainWindow):
         self.save_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton), "保存", self)
         self.save_action.setShortcut(QKeySequence.StandardKey.Save)
         self.save_as_action = QAction("名前を付けて保存", self)
+        self.undo_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_ArrowBack), "元に戻す", self)
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.redo_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_ArrowForward), "やり直す", self)
+        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         self.analyze_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_BrowserReload), "再解析", self)
         self.analyze_action.setShortcut(QKeySequence("F5"))
         self.performance_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon), "性能評価", self)
+        self.system_settings_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView), "像面・光線条件", self)
+        self.automatic_design_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_MediaPlay), "自動設計", self)
         self.reset_view_action = QAction("全体表示", self)
         self.import_action = QAction("Edmund Excelを再取込", self)
+        self._update_history_actions()
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Design", self)
         toolbar.setObjectName("designToolbar")
         toolbar.setMovable(False)
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        for action in (self.new_action, self.open_action, self.save_action, self.analyze_action, self.performance_action):
+        for action in (
+            self.new_action,
+            self.open_action,
+            self.save_action,
+            self.undo_action,
+            self.redo_action,
+            self.analyze_action,
+            self.performance_action,
+            self.system_settings_action,
+            self.automatic_design_action,
+        ):
             toolbar.addAction(action)
         toolbar.addSeparator()
 
@@ -172,8 +195,18 @@ class MainWindow(QMainWindow):
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("ファイル")
         file_menu.addActions([self.new_action, self.open_action, self.save_action, self.save_as_action])
+        edit_menu = self.menuBar().addMenu("編集")
+        edit_menu.addActions([self.undo_action, self.redo_action])
         design_menu = self.menuBar().addMenu("設計")
-        design_menu.addActions([self.analyze_action, self.performance_action, self.reset_view_action])
+        design_menu.addActions(
+            [
+                self.analyze_action,
+                self.performance_action,
+                self.system_settings_action,
+                self.automatic_design_action,
+                self.reset_view_action,
+            ]
+        )
         design_menu.addAction(self.surface_dock.toggleViewAction())
         catalog_menu = self.menuBar().addMenu("カタログ")
         catalog_menu.addAction(self.import_action)
@@ -185,8 +218,12 @@ class MainWindow(QMainWindow):
         self.open_action.triggered.connect(self.open_design)
         self.save_action.triggered.connect(self.save_design)
         self.save_as_action.triggered.connect(lambda: self.save_design(save_as=True))
+        self.undo_action.triggered.connect(self.undo)
+        self.redo_action.triggered.connect(self.redo)
         self.analyze_action.triggered.connect(lambda: self.schedule_analysis(force=True))
         self.performance_action.triggered.connect(self.open_performance_window)
+        self.system_settings_action.triggered.connect(self.open_system_settings)
+        self.automatic_design_action.triggered.connect(self.open_automatic_design)
         self.reset_view_action.triggered.connect(self.lens_view.reset_view)
         self.import_action.triggered.connect(self.reimport_catalog)
         self.catalog_panel.productActivated.connect(self.insert_catalog_product)
@@ -196,6 +233,7 @@ class MainWindow(QMainWindow):
         self.lens_view.gapChangeRequested.connect(self.set_gap_after_element)
         self.lens_view.elementActionRequested.connect(self._element_action_requested)
         self.lens_view.surfaceActionRequested.connect(self._diagram_action_requested)
+        self.lens_view.imageEditRequested.connect(self.open_system_settings)
         self.diagram_editor.designChanged.connect(self._design_changed)
         self.diagram_editor.selectionRequested.connect(self._select)
         self.diagram_editor.actionRequested.connect(self._diagram_action_requested)
@@ -561,6 +599,12 @@ class MainWindow(QMainWindow):
         signature = design_signature(self.design)
         if signature == self._design_signature:
             return
+        if not self._restoring_history:
+            self._undo_stack.append(deepcopy(self._last_committed_design))
+            self._undo_stack = self._undo_stack[-100:]
+            self._redo_stack.clear()
+        self._last_committed_design = deepcopy(self.design.to_dict())
+        self._update_history_actions()
         self._design_signature = signature
         optical_signature = analysis_signature(self.design)
         optical_change = optical_signature != self._analysis_signature
@@ -571,6 +615,10 @@ class MainWindow(QMainWindow):
         self._refresh_all()
         if self._performance_window is not None:
             self._performance_window.set_design(self.design)
+        if self._system_settings_window is not None and self.sender() is not self._system_settings_window:
+            self._system_settings_window.set_design(self.design)
+        if self._automatic_design_window is not None:
+            self._automatic_design_window.set_design(self.design)
         if optical_change:
             self._analysis_debounce.start()
 
@@ -595,12 +643,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"解析失敗: {result.error}", 10000)
 
     def new_design(self) -> None:
-        self.design = OpticalDesign.starter()
+        self._replace_design(OpticalDesign.starter())
         self.current_path = None
-        self.selected_element = 0
-        self.selected_surface = 0
-        self.selected_kind = "surface"
-        self._design_changed()
         self._update_title()
 
     def open_design(self) -> None:
@@ -608,16 +652,71 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            self.design = load_project(path)
+            design = load_project(path)
         except Exception as exc:
             QMessageBox.critical(self, "読込エラー", str(exc))
             return
         self.current_path = Path(path)
-        self.selected_element = 0
-        self.selected_surface = 0
-        self.selected_kind = "surface"
-        self._design_changed()
+        self._replace_design(design)
         self._update_title()
+
+    def _replace_design(self, design: OpticalDesign) -> None:
+        self.design = design
+        self.selected_element = 0 if design.elements else -1
+        self.selected_surface = 0 if design.elements else -1
+        self.selected_kind = "surface" if design.elements else ""
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._last_committed_design = deepcopy(design.to_dict())
+        self._design_signature = design_signature(design)
+        self._analysis_signature = analysis_signature(design)
+        self._analysis_generation += 1
+        self.current_analysis = FirstOrderAnalysis(valid=False, engine="Optiland 0.5.9", error="解析待ち")
+        self._refresh_all()
+        if self._performance_window is not None:
+            self._performance_window.set_design(design)
+        if self._system_settings_window is not None:
+            self._system_settings_window.set_design(design)
+        if self._automatic_design_window is not None:
+            self._automatic_design_window.set_design(design)
+        self._update_history_actions()
+        self._analysis_debounce.start()
+
+    def undo(self) -> None:
+        if not self._undo_stack:
+            return
+        self._redo_stack.append(deepcopy(self.design.to_dict()))
+        self._restore_history(self._undo_stack.pop())
+
+    def redo(self) -> None:
+        if not self._redo_stack:
+            return
+        self._undo_stack.append(deepcopy(self.design.to_dict()))
+        self._restore_history(self._redo_stack.pop())
+
+    def _restore_history(self, snapshot: dict) -> None:
+        self._restoring_history = True
+        try:
+            self.design = OpticalDesign.from_dict(deepcopy(snapshot))
+            self._last_committed_design = deepcopy(snapshot)
+            self._design_signature = design_signature(self.design)
+            self._analysis_signature = analysis_signature(self.design)
+            self._analysis_generation += 1
+            self.current_analysis = FirstOrderAnalysis(valid=False, engine="Optiland 0.5.9", error="解析待ち")
+            self._refresh_all()
+            if self._performance_window is not None:
+                self._performance_window.set_design(self.design)
+            if self._system_settings_window is not None:
+                self._system_settings_window.set_design(self.design)
+            self._analysis_debounce.start()
+        finally:
+            self._restoring_history = False
+            self._update_history_actions()
+
+    def _update_history_actions(self) -> None:
+        if hasattr(self, "undo_action"):
+            self.undo_action.setEnabled(bool(self._undo_stack))
+            self.redo_action.setEnabled(bool(self._redo_stack))
 
     def save_design(self, save_as: bool = False) -> None:
         destination = self.current_path
@@ -662,9 +761,46 @@ class MainWindow(QMainWindow):
         self._performance_window.raise_()
         self._performance_window.activateWindow()
 
+    def open_system_settings(self) -> None:
+        if self._system_settings_window is None:
+            from .system_settings_window import SystemSettingsWindow
+
+            self._system_settings_window = SystemSettingsWindow(self.design, self)
+            self._system_settings_window.designChanged.connect(self._design_changed)
+        else:
+            self._system_settings_window.set_design(self.design)
+        self._system_settings_window.show_image_tab()
+        self._system_settings_window.show()
+        self._system_settings_window.raise_()
+        self._system_settings_window.activateWindow()
+
+    def open_automatic_design(self) -> None:
+        if self._automatic_design_window is None:
+            from .automatic_design_window import AutomaticDesignWindow
+
+            self._automatic_design_window = AutomaticDesignWindow(self.design, self.repository_root, self)
+            self._automatic_design_window.applyRequested.connect(self._apply_automatic_design)
+        else:
+            self._automatic_design_window.set_design(self.design)
+        self._automatic_design_window.show()
+        self._automatic_design_window.raise_()
+        self._automatic_design_window.activateWindow()
+
+    def _apply_automatic_design(self, optimized_design: OpticalDesign) -> None:
+        previous = deepcopy(self.design.to_dict())
+        self.design = optimized_design
+        self._last_committed_design = previous
+        self._design_signature = design_signature(OpticalDesign.from_dict(previous))
+        self._design_changed()
+        self.statusBar().showMessage("自動設計の最良案を適用しました", 6000)
+
     def closeEvent(self, event) -> None:
         self._analysis_debounce.stop()
         self._analysis_controller.shutdown()
         if self._performance_window is not None:
             self._performance_window.shutdown()
+        if self._system_settings_window is not None:
+            self._system_settings_window.close()
+        if self._automatic_design_window is not None:
+            self._automatic_design_window.shutdown()
         super().closeEvent(event)

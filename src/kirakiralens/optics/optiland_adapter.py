@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import atan, degrees, inf
+from math import inf
 from typing import Any
 
 from ..domain import OpticalDesign
+from .configuration import resolved_field_angles, sensor_angle_of_view
 
 
 MATERIAL_ALIASES = {
@@ -23,6 +24,11 @@ class FirstOrderAnalysis:
     image_f_number: float | None = None
     entrance_pupil_diameter_mm: float | None = None
     total_track_mm: float | None = None
+    angle_of_view_horizontal_deg: float | None = None
+    angle_of_view_vertical_deg: float | None = None
+    angle_of_view_diagonal_deg: float | None = None
+    maximum_half_field_angle_deg: float | None = None
+    field_angles_deg: list[float] = field(default_factory=list)
     refractive_indices: list[float] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     error: str = ""
@@ -35,7 +41,8 @@ class OptilandAdapter:
         from optiland import optic, physical_apertures
 
         system = optic.Optic(design.name)
-        system.add_surface(index=0, thickness=inf, comment="Object")
+        object_distance = design.settings.object_distance_mm
+        system.add_surface(index=0, thickness=inf if object_distance == inf else float(object_distance), comment="Object")
         surface_number = 1
         for element_index, element in enumerate(design.elements):
             stop_surface_index = design.stop_surface_index
@@ -70,14 +77,14 @@ class OptilandAdapter:
         system.add_surface(index=surface_number, comment="Image")
         system.set_aperture(aperture_type="imageFNO", value=design.settings.f_number_target)
         system.set_field_type(field_type="angle")
-        half_diagonal = ((design.settings.sensor_width_mm / 2) ** 2 + (design.settings.sensor_height_mm / 2) ** 2) ** 0.5
-        maximum_field = degrees(atan(half_diagonal / design.settings.focal_length_target_mm))
-        for field_fraction in (0.0, 0.7, 1.0):
-            system.add_field(y=maximum_field * field_fraction)
-        for wavelength in design.settings.wavelengths_um:
+        for field_angle in resolved_field_angles(design.settings):
+            system.add_field(y=field_angle)
+        weights = design.settings.wavelength_weights + [1.0] * len(design.settings.wavelengths_um)
+        for wavelength, weight in zip(design.settings.wavelengths_um, weights, strict=False):
             system.add_wavelength(
                 value=wavelength,
                 is_primary=abs(wavelength - design.settings.primary_wavelength_um) < 1e-9,
+                weight=weight,
             )
         system.update()
         return system
@@ -91,14 +98,22 @@ class OptilandAdapter:
             system = self.to_optic(design)
             final_gap = design.elements[-1].gap_after_mm
             indices = [float(value) for value in system.n()]
+            effective_focal_length = float(system.paraxial.f2())
+            angles = sensor_angle_of_view(design.settings, effective_focal_length)
+            traced_fields = resolved_field_angles(design.settings)
             result = FirstOrderAnalysis(
                 valid=True,
                 engine=f"Optiland {getattr(optiland, '__version__', 'unknown')}",
-                effective_focal_length_mm=float(system.paraxial.f2()),
+                effective_focal_length_mm=effective_focal_length,
                 back_focal_length_mm=float(final_gap + system.paraxial.F2()),
                 image_f_number=float(system.paraxial.FNO()),
                 entrance_pupil_diameter_mm=float(system.paraxial.EPD()),
                 total_track_mm=float(system.total_track),
+                angle_of_view_horizontal_deg=angles["horizontal_deg"],
+                angle_of_view_vertical_deg=angles["vertical_deg"],
+                angle_of_view_diagonal_deg=angles["diagonal_deg"],
+                maximum_half_field_angle_deg=max(traced_fields),
+                field_angles_deg=traced_fields,
                 refractive_indices=indices,
             )
             if result.back_focal_length_mm is not None and result.back_focal_length_mm <= 0:

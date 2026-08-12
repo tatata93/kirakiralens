@@ -13,8 +13,12 @@ The current milestone includes:
 - catalog filtering and insertion into the current design;
 - versioned `.kklens` project save/load;
 - cached, non-blocking Optiland first-order analysis;
+- directly editable image plane with sensor presets, field angles, ray sampling,
+  Fraunhofer wavelength presets, and wavelength/field weights;
 - a manual performance window for polychromatic MTF, spot, transverse and
-  longitudinal aberration, field curvature, and distortion.
+  longitudinal aberration, field curvature, and distortion;
+- cancellable continuous automatic design for unlocked custom radii,
+  thicknesses, air gaps, and image-plane position.
 
 ![KiraKiraLens main window](docs/images/main-window.png)
 
@@ -51,3 +55,5 @@ The current implementation status and known limitations are recorded in
 [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md).
 The definitions, units, references, and optimizer-facing performance metrics
 are recorded in [`docs/PERFORMANCE_ANALYSIS.md`](docs/PERFORMANCE_ANALYSIS.md).
+The automatic-design merit function, source research, and current limits are in
+[`docs/AUTOMATIC_DESIGN.md`](docs/AUTOMATIC_DESIGN.md).

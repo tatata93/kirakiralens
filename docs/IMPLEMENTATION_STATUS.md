@@ -15,6 +15,13 @@ Verified working:
   and editable gap/BFL dimensions.
 - Full-frame / infinity / 50 mm / F4 / Pentax K target preset with editable EFL,
   F-number, BFL, and maximum diameter controls.
+- The IMAGE plane is directly clickable. Its modeless editor includes common
+  sensor presets and custom width/height, finite/infinite object distance,
+  image distance and lock, sensor-derived or arbitrary field angles, field
+  weights, F/d/C and other wavelength presets, wavelength weights, primary
+  wavelength, and ray/curve sampling counts.
+- Horizontal, vertical, and diagonal angle of view appear in first-order and
+  performance results; every performance field carries its actual half-angle.
 - Initial custom triplet whose Optiland result is EFL 50.000 mm and BFL 45.460 mm.
 - A persistent editor directly above the diagram exposes surface type, radius,
   conic constant, even-asphere coefficients, thickness/gap, material, clear and
@@ -24,6 +31,8 @@ Verified working:
   L1, and every air gap/BFL has an in-diagram numeric spin box as well as drag.
 - Non-blocking context menus for surfaces, elements, and gaps. The synchronized
   surface table remains available as an optional hidden-by-default dock.
+- Undo and redo cover prescription, insertion/deletion, spacing, image-plane,
+  and ray-setting edits.
 - Correct reversal of singlets and cemented doublets, including radius signs,
   media order, thickness order, and surface coatings.
 - Catalog part immutability and conversion to a custom copy.
@@ -31,13 +40,17 @@ Verified working:
 - Optiland 0.5.9 runs in persistent child processes. Startup performs no optical
   calculation. Edits are debounced, non-optical edits do not trigger analysis,
   and unchanged prescriptions reuse bounded in-memory caches.
-- A modeless performance window calculates and plots equal-weight polychromatic
+- A modeless performance window calculates and plots weighted polychromatic
   MTF, spot diagrams, transverse and longitudinal aberration, field curvature,
   astigmatism, and distortion. Stable merit metrics are stored for optimization.
 - Element diameter and per-surface clear aperture are hard radial apertures in
   Optiland real-ray tracing.
 - Catalog filters for manufacturer, text, shape, material, coating, diameter,
   clear aperture, EFL, power sign, wavelength, and photographic relevance.
+- A dedicated automatic-design window runs cancellable, budgeted Optiland
+  real-ray continuous optimization of unlocked custom radii/thicknesses, air
+  gaps, and optionally the image plane. It exposes normalized EFL, BFL, spot,
+  and distortion weights and applies a best result only on request.
 
 ## Edmund catalog result
 
@@ -64,12 +77,16 @@ workbook. They are deliberately not designable. See
 - `src/kirakiralens/optics/analysis_process.py`: isolated Optiland worker process.
 - `src/kirakiralens/optics/performance.py`: numerical performance analyses and merit metrics.
 - `src/kirakiralens/optics/performance_process.py`: isolated performance worker.
+- `src/kirakiralens/optics/automatic_design.py`: locks, variables, normalized merit, and optimization.
+- `src/kirakiralens/optics/automatic_design_process.py`: isolated optimization worker.
 - `src/kirakiralens/optics/paraxial.py`: ray paths using indices returned by Optiland.
 - `src/kirakiralens/ui/analysis_controller.py`: debouncing and process lifecycle.
 - `src/kirakiralens/ui/diagram_editor.py`: diagram selection property editor.
 - `src/kirakiralens/ui/lens_view.py`: interactive lens cross-section.
 - `src/kirakiralens/ui/main_window.py`: desktop workspace and background analysis.
 - `src/kirakiralens/ui/performance_window.py`: modeless analysis controls and plots.
+- `src/kirakiralens/ui/system_settings_window.py`: image, field, wavelength, and ray settings.
+- `src/kirakiralens/ui/automatic_design_window.py`: optimization budget, merit weights, and results.
 - `tests/`: domain, import, persistence, Optiland, and UI smoke tests.
 
 ## Verification
@@ -81,19 +98,18 @@ Run:
 .\.venv\Scripts\python.exe -m kirakiralens
 ```
 
-The current suite has twelve passing tests. A Windows-rendered 1500 x 900 capture
+The current suite has sixteen passing tests. A Windows-rendered 1500 x 900 capture
 is stored at `docs/images/main-window.png` and has been checked for text clipping
 and incoherent overlap.
 
 ## Known limitations and next phase
 
-The next work should be Phase 3: constrained continuous optimization.
+The next work should finish Phase 3 and begin Phase 4's discrete catalog search.
 
 Not yet implemented:
 
-- Merit-function editor and adjustable metric weights.
-- Optimization of unlocked gaps, stop position, and custom curvatures.
-- Search duration, pause/cancel/checkpoints, and candidate comparison.
+- Per-metric hard limits/goals, stop-position optimization, checkpoints, pause,
+  and multi-candidate/Pareto comparison.
 - Triplet, Tessar, and Double Gauss catalog searches.
 - Free-topology discrete-continuous search.
 - PSF, relative-illumination, through-focus, and tolerance analysis views.
