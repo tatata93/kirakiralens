@@ -20,16 +20,22 @@ Verified working:
   conic constant, even-asphere coefficients, thickness/gap, material, clear and
   outer diameter, coating, comment, variable locks, and stop assignment.
 - Diagram operations for inserting, duplicating, deleting, reversing, and
-  customizing elements and surfaces. Air gaps are selectable and draggable.
+  customizing elements and surfaces. A dedicated insertion target exists before
+  L1, and every air gap/BFL has an in-diagram numeric spin box as well as drag.
 - Non-blocking context menus for surfaces, elements, and gaps. The synchronized
   surface table remains available as an optional hidden-by-default dock.
 - Correct reversal of singlets and cemented doublets, including radius signs,
   media order, thickness order, and surface coatings.
 - Catalog part immutability and conversion to a custom copy.
 - Versioned `.kklens` ZIP container containing strict, human-readable JSON.
-- Optiland 0.5.9 runs in a persistent child process. Edits are debounced and only
-  the latest pending design is analyzed, keeping the GUI responsive during the
-  roughly eight-second engine call.
+- Optiland 0.5.9 runs in persistent child processes. Startup performs no optical
+  calculation. Edits are debounced, non-optical edits do not trigger analysis,
+  and unchanged prescriptions reuse bounded in-memory caches.
+- A modeless performance window calculates and plots equal-weight polychromatic
+  MTF, spot diagrams, transverse and longitudinal aberration, field curvature,
+  astigmatism, and distortion. Stable merit metrics are stored for optimization.
+- Element diameter and per-surface clear aperture are hard radial apertures in
+  Optiland real-ray tracing.
 - Catalog filters for manufacturer, text, shape, material, coating, diameter,
   clear aperture, EFL, power sign, wavelength, and photographic relevance.
 
@@ -56,11 +62,14 @@ workbook. They are deliberately not designable. See
 - `src/kirakiralens/catalog/database.py`: SQLite schema and catalog queries.
 - `src/kirakiralens/optics/optiland_adapter.py`: pinned Optiland 0.5.9 boundary.
 - `src/kirakiralens/optics/analysis_process.py`: isolated Optiland worker process.
+- `src/kirakiralens/optics/performance.py`: numerical performance analyses and merit metrics.
+- `src/kirakiralens/optics/performance_process.py`: isolated performance worker.
 - `src/kirakiralens/optics/paraxial.py`: ray paths using indices returned by Optiland.
 - `src/kirakiralens/ui/analysis_controller.py`: debouncing and process lifecycle.
 - `src/kirakiralens/ui/diagram_editor.py`: diagram selection property editor.
 - `src/kirakiralens/ui/lens_view.py`: interactive lens cross-section.
 - `src/kirakiralens/ui/main_window.py`: desktop workspace and background analysis.
+- `src/kirakiralens/ui/performance_window.py`: modeless analysis controls and plots.
 - `tests/`: domain, import, persistence, Optiland, and UI smoke tests.
 
 ## Verification
@@ -72,7 +81,7 @@ Run:
 .\.venv\Scripts\python.exe -m kirakiralens
 ```
 
-The current suite has ten passing tests. A Windows-rendered 1500 x 900 capture
+The current suite has twelve passing tests. A Windows-rendered 1500 x 900 capture
 is stored at `docs/images/main-window.png` and has been checked for text clipping
 and incoherent overlap.
 
@@ -87,7 +96,7 @@ Not yet implemented:
 - Search duration, pause/cancel/checkpoints, and candidate comparison.
 - Triplet, Tessar, and Double Gauss catalog searches.
 - Free-topology discrete-continuous search.
-- Spot, MTF, PSF, distortion, and relative-illumination analysis views.
+- PSF, relative-illumination, through-focus, and tolerance analysis views.
 - `.seq`, `.len`, and `.zmx` exchange.
 - Vendor web collectors, price history, and stock tracking.
 - User-created preset persistence beyond the built-in editable preset.

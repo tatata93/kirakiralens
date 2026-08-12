@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QContextMenuEvent, QMouseEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDoubleSpinBox
 
 from kirakiralens.ui.main_window import MainWindow
 
@@ -145,5 +145,51 @@ def test_main_window_constructs_with_generated_catalog() -> None:
     assert window.catalog_panel.min_diameter.maximum() == 10000
     assert window.inspector.diameter.maximum() == 10000
     assert window.surface_dock.isHidden()
+    window.close()
+    application.processEvents()
+
+
+def test_front_insertion_and_diagram_gap_spin_box() -> None:
+    application = QApplication.instance() or QApplication([])
+    root = Path(__file__).resolve().parents[1]
+    window = MainWindow(root, analyze_on_start=False)
+    window.show()
+    application.processEvents()
+
+    original_generation = window._analysis_generation
+    window._design_changed()
+    assert window._analysis_generation == original_generation
+
+    front_item = next(
+        item for item in window.lens_view.scene().items()
+        if item.data(0) == "front_gap" and item.sceneBoundingRect().center().x() < 0
+    )
+    front_position = window.lens_view.mapFromScene(front_item.sceneBoundingRect().center())
+    front_event = QContextMenuEvent(
+        QContextMenuEvent.Reason.Mouse,
+        front_position,
+        window.lens_view.mapToGlobal(front_position),
+    )
+    element_count = len(window.design.elements)
+    window.lens_view.contextMenuEvent(front_event)
+    custom_action = next(
+        action for action in window.lens_view._context_menu.actions()
+        if "カスタム" in action.text()
+    )
+    custom_action.trigger()
+    application.processEvents()
+    assert len(window.design.elements) == element_count + 1
+    assert window.design.elements[0].name == "Custom singlet"
+
+    gap_spin = next(
+        spin for spin, _ in window.lens_view._gap_spins
+        if isinstance(spin, QDoubleSpinBox) and spin.objectName() == "layoutGapSpin0"
+    )
+    original_gap = window.design.elements[0].gap_after_mm
+    gap_spin.setValue(original_gap + 0.1)
+    window.lens_view._flush_gap_edit()
+    application.processEvents()
+    assert window.design.elements[0].gap_after_mm == original_gap + 0.1
+
     window.close()
     application.processEvents()

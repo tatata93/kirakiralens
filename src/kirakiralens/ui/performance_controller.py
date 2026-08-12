@@ -8,78 +8,94 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
 from ..domain import OpticalDesign
-from ..optics.optiland_adapter import FirstOrderAnalysis
+from ..optics.performance import normalized_options
 from ..optics.signature import analysis_signature
 
 
-class AnalysisController(QObject):
-    """Run Optiland outside the UI process and coalesce superseded requests."""
-
+class PerformanceController(QObject):
     finished = Signal(int, object)
     statusChanged = Signal(str)
+    runningChanged = Signal(bool)
 
-    def __init__(self, cache_directory: Path | None = None, parent: QObject | None = None):
+    def __init__(self, cache_directory: Path, parent: QObject | None = None):
         super().__init__(parent)
+        cache_directory.mkdir(parents=True, exist_ok=True)
         self.process = QProcess(self)
         self.process.setProgram(sys.executable)
-        self.process.setArguments(["-m", "kirakiralens.optics.analysis_process"])
-        if cache_directory is not None:
-            cache_directory.mkdir(parents=True, exist_ok=True)
-            environment = QProcessEnvironment.systemEnvironment()
-            environment.insert("MPLCONFIGDIR", str(cache_directory))
-            self.process.setProcessEnvironment(environment)
+        self.process.setArguments(["-m", "kirakiralens.optics.performance_process"])
+        environment = QProcessEnvironment.systemEnvironment()
+        environment.insert("MPLCONFIGDIR", str(cache_directory))
+        self.process.setProcessEnvironment(environment)
         self.process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
         self.process.started.connect(self._send_pending)
         self.process.readyReadStandardOutput.connect(self._read_stdout)
         self.process.readyReadStandardError.connect(self._read_stderr)
         self.process.errorOccurred.connect(self._process_error)
         self.process.finished.connect(self._process_finished)
-        self._stdout_buffer = ""
-        self._stderr_buffer = ""
-        self._pending: tuple[int, dict, str] | None = None
+        self._pending: tuple[int, dict, dict, str] | None = None
         self._active_generation: int | None = None
         self._active_signature: str | None = None
-        self._cache: OrderedDict[str, FirstOrderAnalysis] = OrderedDict()
+        self._stdout_buffer = ""
+        self._stderr_buffer = ""
+        self._cache: OrderedDict[str, dict] = OrderedDict()
+        self._cancelled = False
         self._shutting_down = False
         self._timeout = QTimer(self)
         self._timeout.setSingleShot(True)
-        self._timeout.setInterval(60000)
+        self._timeout.setInterval(180000)
         self._timeout.timeout.connect(self._request_timed_out)
 
-    def submit(self, generation: int, design: OpticalDesign, force: bool = False) -> None:
-        signature = analysis_signature(design)
-        if not force and signature in self._cache:
+    def submit(self, generation: int, design: OpticalDesign, options: dict) -> None:
+        resolved = normalized_options(options)
+        signature = analysis_signature(design, resolved)
+        if signature in self._cache:
             result = self._cache[signature]
             self._cache.move_to_end(signature)
+            self.statusChanged.emit("設計と解析設定に変更がないため、保存済み結果を表示しました")
             QTimer.singleShot(0, lambda: self.finished.emit(generation, result))
-            self.statusChanged.emit("設計に変更がないため、保存済みの解析結果を表示しました")
             return
-        if not force and self._active_signature == signature:
+        if self._active_signature == signature:
+            self.statusChanged.emit("同じ性能解析を実行中です")
             return
-        if not force and self._pending is not None and self._pending[2] == signature:
-            return
-        self._pending = (generation, design.to_dict(), signature)
+        self._pending = (generation, design.to_dict(), resolved, signature)
+        self._cancelled = False
         if self._active_generation is not None:
             return
         if self.process.state() == QProcess.ProcessState.NotRunning:
             self._stderr_buffer = ""
-            self.statusChanged.emit("解析エンジンを起動中 (操作可能)")
+            self.statusChanged.emit("性能解析エンジンを起動中。設計画面は操作できます")
+            self.runningChanged.emit(True)
             self.process.start()
-            return
-        if self.process.state() == QProcess.ProcessState.Running:
+        else:
             self._send_pending()
+
+    def cancel(self) -> None:
+        self._pending = None
+        self._active_generation = None
+        self._active_signature = None
+        self._cancelled = True
+        self._timeout.stop()
+        if self.process.state() != QProcess.ProcessState.NotRunning:
+            self.process.kill()
+        else:
+            self.runningChanged.emit(False)
+        self.statusChanged.emit("性能解析を停止しました")
 
     def _send_pending(self) -> None:
         if self._pending is None or self._active_generation is not None:
             return
-        generation, design, signature = self._pending
+        generation, design, options, signature = self._pending
         self._pending = None
         self._active_generation = generation
         self._active_signature = signature
-        payload = json.dumps({"generation": generation, "design": design}, ensure_ascii=True) + "\n"
+        payload = json.dumps(
+            {"generation": generation, "design": design, "options": options},
+            ensure_ascii=True,
+        ) + "\n"
         self.process.write(payload.encode("utf-8"))
         self._timeout.start()
-        self.statusChanged.emit("Optilandで解析中 (操作可能)")
+        self.runningChanged.emit(True)
+        self.statusChanged.emit("実光線を追跡して性能を計算中。設計画面は操作できます")
 
     def _read_stdout(self) -> None:
         self._stdout_buffer += bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
@@ -90,34 +106,36 @@ class AnalysisController(QObject):
             try:
                 payload = json.loads(line)
                 generation = int(payload["generation"])
-                result = FirstOrderAnalysis(**payload["result"])
+                result = dict(payload["result"])
             except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                 continue
-            self._timeout.stop()
             signature = self._active_signature
+            self._timeout.stop()
             self._active_generation = None
             self._active_signature = None
-            if signature is not None and result.valid:
+            if signature is not None and result.get("valid"):
                 self._cache[signature] = result
                 self._cache.move_to_end(signature)
-                while len(self._cache) > 16:
+                while len(self._cache) > 8:
                     self._cache.popitem(last=False)
+            self.runningChanged.emit(False)
             self.finished.emit(generation, result)
             self._send_pending()
 
     def _read_stderr(self) -> None:
         self._stderr_buffer += bytes(self.process.readAllStandardError()).decode("utf-8", errors="replace")
-        self._stderr_buffer = self._stderr_buffer[-8000:]
+        self._stderr_buffer = self._stderr_buffer[-12000:]
 
     def _request_timed_out(self) -> None:
         generation = self._active_generation
         self._active_generation = None
         self._active_signature = None
         self.process.kill()
+        self.runningChanged.emit(False)
         if generation is not None:
             self.finished.emit(
                 generation,
-                FirstOrderAnalysis(valid=False, engine="Optiland process", error="解析が60秒でタイムアウトしました"),
+                {"valid": False, "engine": "Optiland performance process", "warnings": ["性能解析が180秒でタイムアウトしました"]},
             )
 
     def _process_finished(self) -> None:
@@ -125,11 +143,13 @@ class AnalysisController(QObject):
         generation = self._active_generation
         self._active_generation = None
         self._active_signature = None
-        if generation is not None and not self._shutting_down:
-            error = self._stderr_buffer.strip().splitlines()[-1] if self._stderr_buffer.strip() else "解析プロセスが終了しました"
-            self.finished.emit(generation, FirstOrderAnalysis(valid=False, engine="Optiland process", error=error))
-        if self._pending is not None and not self._shutting_down:
-            QTimer.singleShot(100, self.process.start)
+        self.runningChanged.emit(False)
+        if generation is not None and not self._cancelled and not self._shutting_down:
+            error = self._stderr_buffer.strip().splitlines()[-1] if self._stderr_buffer.strip() else "性能解析プロセスが終了しました"
+            self.finished.emit(
+                generation,
+                {"valid": False, "engine": "Optiland performance process", "warnings": [error]},
+            )
 
     def _process_error(self, error) -> None:
         if self._shutting_down or error != QProcess.ProcessError.FailedToStart:
@@ -138,12 +158,13 @@ class AnalysisController(QObject):
         self._active_generation = None
         self._active_signature = None
         if generation is None and self._pending is not None:
-            generation, _, _ = self._pending
+            generation = self._pending[0]
             self._pending = None
+        self.runningChanged.emit(False)
         if generation is not None:
             self.finished.emit(
                 generation,
-                FirstOrderAnalysis(valid=False, engine="Optiland process", error="解析プロセスを起動できませんでした"),
+                {"valid": False, "engine": "Optiland performance process", "warnings": ["性能解析プロセスを起動できませんでした"]},
             )
 
     def shutdown(self) -> None:

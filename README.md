@@ -12,9 +12,13 @@ The current milestone includes:
 - an Edmund Optics catalog database generated from the supplied workbooks;
 - catalog filtering and insertion into the current design;
 - versioned `.kklens` project save/load;
-- Optiland first-order analysis with a deterministic paraxial fallback.
+- cached, non-blocking Optiland first-order analysis;
+- a manual performance window for polychromatic MTF, spot, transverse and
+  longitudinal aberration, field curvature, and distortion.
 
 ![KiraKiraLens main window](docs/images/main-window.png)
+
+![KiraKiraLens performance window](docs/images/performance-window.png)
 
 ## Setup
 
@@ -45,3 +49,5 @@ The detailed product requirements live in
 [`docs/DEVELOPMENT_PROMPT.md`](docs/DEVELOPMENT_PROMPT.md).
 The current implementation status and known limitations are recorded in
 [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md).
+The definitions, units, references, and optimizer-facing performance metrics
+are recorded in [`docs/PERFORMANCE_ANALYSIS.md`](docs/PERFORMANCE_ANALYSIS.md).

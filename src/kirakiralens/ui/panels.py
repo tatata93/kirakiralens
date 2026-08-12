@@ -175,11 +175,9 @@ class CatalogPanel(QWidget):
         self.table.setMinimumWidth(0)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        for column, width in enumerate((82, 92, 58, 58, 72)):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+            self.table.setColumnWidth(column, width)
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table, 1)
 
@@ -250,21 +248,28 @@ class CatalogPanel(QWidget):
             target_efl_mm=self.target_efl,
             limit=1000,
         )
-        self.table.setRowCount(len(self._products))
-        for row, product in enumerate(self._products):
-            values = [
-                product.part_number,
-                SHAPE_LABELS.get(product.shape, product.shape),
-                "" if product.outer_diameter_mm is None else f"{product.outer_diameter_mm:g}",
-                "" if product.clear_aperture_mm is None else f"{product.clear_aperture_mm:g}",
-                "" if product.effective_focal_length_mm is None else f"{product.effective_focal_length_mm:g}",
-                product.materials,
-            ]
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                if column in (2, 3, 4):
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                self.table.setItem(row, column, item)
+        self.table.setUpdatesEnabled(False)
+        self.table.blockSignals(True)
+        try:
+            self.table.clearContents()
+            self.table.setRowCount(len(self._products))
+            for row, product in enumerate(self._products):
+                values = [
+                    product.part_number,
+                    SHAPE_LABELS.get(product.shape, product.shape),
+                    "" if product.outer_diameter_mm is None else f"{product.outer_diameter_mm:g}",
+                    "" if product.clear_aperture_mm is None else f"{product.clear_aperture_mm:g}",
+                    "" if product.effective_focal_length_mm is None else f"{product.effective_focal_length_mm:g}",
+                    product.materials,
+                ]
+                for column, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    if column in (2, 3, 4):
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    self.table.setItem(row, column, item)
+        finally:
+            self.table.blockSignals(False)
+            self.table.setUpdatesEnabled(True)
         total = self.repository.count_products()
         suffix = "上限1000件" if len(self._products) == 1000 else f"全{total}件"
         self.count_label.setText(f"{len(self._products)}件 / {suffix}")
@@ -272,11 +277,18 @@ class CatalogPanel(QWidget):
         self.details.setText("部品を選択すると仕様を表示します")
 
     def set_design_targets(self, focal_length_mm: float, f_number: float, max_diameter_mm: float) -> None:
+        changed = (
+            abs(self.target_efl - abs(focal_length_mm)) > 1e-9
+            or abs(self._design_f_number - f_number) > 1e-9
+            or abs(self._design_max_diameter - max_diameter_mm) > 1e-9
+        )
         self.target_efl = abs(focal_length_mm)
         self._design_f_number = f_number
         self._design_max_diameter = max_diameter_mm
-        self.max_diameter.setValue(max_diameter_mm)
-        self._refresh_timer.start()
+        if abs(self.max_diameter.value() - max_diameter_mm) > 1e-9:
+            self.max_diameter.setValue(max_diameter_mm)
+        if changed:
+            self._refresh_timer.start()
 
     def apply_photo_filter(self) -> None:
         self.min_diameter.setValue(self.target_efl / max(self._design_f_number, 0.1))

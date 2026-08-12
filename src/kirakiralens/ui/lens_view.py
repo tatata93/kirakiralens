@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from math import hypot, isfinite, sqrt
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QGraphicsPathItem,
@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
+    QDoubleSpinBox,
     QMenu,
     QToolTip,
 )
@@ -47,6 +48,14 @@ class LensLayoutView(QGraphicsView):
         self._gap_drag: tuple[int, float, float] | None = None
         self._gap_preview_value = 0.0
         self._context_menu: QMenu | None = None
+        self._pending_gap_edit: tuple[int, float] | None = None
+        self._gap_edit_timer = QTimer(self)
+        self._gap_edit_timer.setSingleShot(True)
+        self._gap_edit_timer.setInterval(250)
+        self._gap_edit_timer.timeout.connect(self._flush_gap_edit)
+        self._gap_spins: list[tuple[QDoubleSpinBox, QPointF]] = []
+        self.horizontalScrollBar().valueChanged.connect(self._position_gap_spins)
+        self.verticalScrollBar().valueChanged.connect(self._position_gap_spins)
 
     def set_design(self, design: OpticalDesign, analysis: FirstOrderAnalysis | None = None) -> None:
         self._design = design
@@ -58,6 +67,7 @@ class LensLayoutView(QGraphicsView):
         self.rebuild()
 
     def rebuild(self) -> None:
+        self._clear_gap_spins()
         scene = self.scene()
         scene.clear()
         design = self._design
@@ -70,7 +80,7 @@ class LensLayoutView(QGraphicsView):
         geometry, image_z = self._geometry(design)
         maximum_radius = max(element.outer_diameter_mm / 2 for element in design.elements)
         vertical_margin = max(12.0, maximum_radius * 0.8)
-        scene.setSceneRect(QRectF(-8, -maximum_radius - vertical_margin, image_z + 16, 2 * (maximum_radius + vertical_margin)))
+        scene.setSceneRect(QRectF(-14, -maximum_radius - vertical_margin, image_z + 24, 2 * (maximum_radius + vertical_margin)))
 
         grid_pen = QPen(QColor("#d9dfdc"), 0)
         grid_pen.setCosmetic(True)
@@ -83,6 +93,7 @@ class LensLayoutView(QGraphicsView):
         axis_pen.setCosmetic(True)
         scene.addLine(-5, 0, image_z + 5, 0, axis_pen)
 
+        self._draw_front_insertion(geometry[0][0], maximum_radius)
         self._draw_rays(design)
         colors = [QColor("#75b7c7"), QColor("#83b98c"), QColor("#d8ae62"), QColor("#9fa9d0")]
         for element_index, (element, surface_z) in enumerate(zip(design.elements, geometry, strict=True)):
@@ -200,6 +211,7 @@ class LensLayoutView(QGraphicsView):
 
         if self._fit_on_resize:
             self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._position_gap_spins()
 
     def _draw_rays(self, design: OpticalDesign) -> None:
         if self._analysis is None or not self._analysis.valid:
@@ -224,11 +236,13 @@ class LensLayoutView(QGraphicsView):
         self.scene().addLine(start, y, end, y, pen)
         self.scene().addLine(start, y - 1, start, y + 1, pen)
         self.scene().addLine(end, y - 1, end, y + 1, pen)
-        label = QGraphicsSimpleTextItem(f"BFL {design.elements[-1].gap_after_mm:.2f} mm")
-        label.setBrush(QColor("#59625f"))
-        label.setScale(0.17)
-        label.setPos((start + end) / 2 - 8, y + 0.8)
-        self.scene().addItem(label)
+        self._add_gap_spin(
+            len(design.elements) - 1,
+            start,
+            end,
+            y,
+            prefix="BFL ",
+        )
 
     def _draw_gap_dimension(self, element_index: int, start: float, end: float, y: float) -> None:
         selected = self._selected == ("gap", element_index, -1)
@@ -241,12 +255,7 @@ class LensLayoutView(QGraphicsView):
             self.scene().addLine(end, y - 0.8, end, y + 0.8, pen),
         ):
             line.setZValue(2)
-        label = QGraphicsSimpleTextItem(f"{self._design.elements[element_index].gap_after_mm:.2f}")
-        label.setBrush(color)
-        label.setScale(0.15)
-        label.setPos((start + end) / 2 - 2.2, y - 2.8)
-        label.setZValue(2)
-        self.scene().addItem(label)
+        self._add_gap_spin(element_index, start, end, y)
         hit_item = QGraphicsRectItem(QRectF(start, y - 1.5, max(end - start, 0.8), 3.0))
         hit_item.setPen(QPen(Qt.PenStyle.NoPen))
         hit_item.setBrush(QColor(0, 0, 0, 1))
@@ -257,6 +266,89 @@ class LensLayoutView(QGraphicsView):
         hit_item.setCursor(Qt.CursorShape.SizeHorCursor)
         hit_item.setZValue(6)
         self.scene().addItem(hit_item)
+
+    def _draw_front_insertion(self, first_surface_z: float, maximum_radius: float) -> None:
+        rect = QGraphicsRectItem(QRectF(first_surface_z - 8.0, -maximum_radius, 6.0, 2 * maximum_radius))
+        rect.setPen(QPen(QColor("#7a8581"), 0, Qt.PenStyle.DashLine))
+        rect.setBrush(QColor(255, 255, 255, 150))
+        rect.setData(ROLE_KIND, "front_gap")
+        rect.setData(ROLE_ELEMENT, -1)
+        rect.setData(ROLE_SURFACE, -1)
+        rect.setToolTip("L1の物体側へレンズを挿入（右クリック）")
+        rect.setCursor(Qt.CursorShape.PointingHandCursor)
+        rect.setZValue(6)
+        self.scene().addItem(rect)
+
+        plus = QGraphicsSimpleTextItem("+")
+        plus.setBrush(QColor("#276b62"))
+        plus.setScale(0.55)
+        plus.setPos(first_surface_z - 6.5, -2.7)
+        plus.setData(ROLE_KIND, "front_gap")
+        plus.setData(ROLE_ELEMENT, -1)
+        plus.setData(ROLE_SURFACE, -1)
+        plus.setToolTip(rect.toolTip())
+        plus.setCursor(Qt.CursorShape.PointingHandCursor)
+        plus.setZValue(7)
+        self.scene().addItem(plus)
+
+    def _add_gap_spin(self, element_index: int, start: float, end: float, y: float, prefix: str = "") -> None:
+        if self._design is None:
+            return
+        element = self._design.elements[element_index]
+        spin = QDoubleSpinBox(self.viewport())
+        spin.setObjectName(f"layoutGapSpin{element_index}")
+        spin.setDecimals(3)
+        spin.setRange(element.gap_min_mm, element.gap_max_mm or 10000.0)
+        spin.setSingleStep(0.1)
+        spin.setAccelerated(True)
+        spin.setKeyboardTracking(False)
+        spin.setAlignment(Qt.AlignmentFlag.AlignRight)
+        spin.setSuffix(" mm")
+        spin.setPrefix(prefix)
+        spin.setValue(element.gap_after_mm)
+        spin.setEnabled(not element.gap_locked)
+        spin.setFixedSize(110 if prefix else 92, 24)
+        spin.setToolTip("空気間隔を直接入力。上下ボタンで0.1 mmずつ調整")
+        spin.valueChanged.connect(lambda value, index=element_index: self._queue_gap_edit(index, value))
+        spin.editingFinished.connect(self._flush_gap_edit_soon)
+
+        self._gap_spins.append((spin, QPointF((start + end) / 2, y + 0.7)))
+        spin.show()
+
+    def _clear_gap_spins(self) -> None:
+        for spin, _ in self._gap_spins:
+            spin.blockSignals(True)
+            spin.hide()
+            spin.deleteLater()
+        self._gap_spins.clear()
+
+    def _position_gap_spins(self) -> None:
+        viewport_rect = self.viewport().rect()
+        visible_bounds = viewport_rect.adjusted(-120, -30, 120, 30)
+        for spin, scene_position in self._gap_spins:
+            position = self.mapFromScene(scene_position)
+            spin.move(position.x() - spin.width() // 2, position.y())
+            spin.setVisible(visible_bounds.contains(position))
+
+    def _queue_gap_edit(self, element_index: int, value: float) -> None:
+        self._pending_gap_edit = (element_index, value)
+        self._gap_edit_timer.start()
+
+    def _flush_gap_edit_soon(self) -> None:
+        self._gap_edit_timer.stop()
+        QTimer.singleShot(0, self._flush_gap_edit)
+
+    def _flush_gap_edit(self) -> None:
+        pending = self._pending_gap_edit
+        self._pending_gap_edit = None
+        if pending is None or self._design is None:
+            return
+        element_index, value = pending
+        if not 0 <= element_index < len(self._design.elements):
+            return
+        if abs(self._design.elements[element_index].gap_after_mm - value) <= 1e-9:
+            return
+        self.gapChangeRequested.emit(element_index, value)
 
     @staticmethod
     def _geometry(design: OpticalDesign) -> tuple[list[list[float]], float]:
@@ -337,6 +429,10 @@ class LensLayoutView(QGraphicsView):
                 kind = str(item.data(ROLE_KIND))
                 element = int(item.data(ROLE_ELEMENT))
                 surface = int(item.data(ROLE_SURFACE))
+                if kind == "front_gap":
+                    self._show_front_insertion_menu(event.globalPosition().toPoint())
+                    event.accept()
+                    return
                 self.selectionRequested.emit(kind, element, surface)
                 if kind == "gap" and self._design is not None and not self._design.elements[element].gap_locked:
                     self._gap_drag = (element, self._design.elements[element].gap_after_mm, self.mapToScene(event.position().toPoint()).x())
@@ -378,8 +474,12 @@ class LensLayoutView(QGraphicsView):
         kind = str(item.data(ROLE_KIND))
         element_index = int(item.data(ROLE_ELEMENT))
         surface_index = int(item.data(ROLE_SURFACE))
-        self.selectionRequested.emit(kind, element_index, surface_index)
+        if kind == "front_gap":
+            self._show_front_insertion_menu(event.globalPos())
+            return
+
         menu = QMenu(self)
+        self.selectionRequested.emit(kind, element_index, surface_index)
         if kind == "gap":
             zero_action = menu.addAction("接触 (0 mm)")
             lock_action = menu.addAction("間隔固定を切替")
@@ -433,6 +533,14 @@ class LensLayoutView(QGraphicsView):
         delete_action.triggered.connect(lambda: self.elementActionRequested.emit("delete", element_index))
         self._show_context_menu(menu, event.globalPos())
 
+    def _show_front_insertion_menu(self, global_position) -> None:
+        menu = QMenu(self)
+        catalog_action = menu.addAction("選択中のカタログレンズをL1の前へ挿入")
+        custom_action = menu.addAction("カスタムレンズをL1の前へ挿入")
+        catalog_action.triggered.connect(lambda: self.insertionRequested.emit("catalog", 0))
+        custom_action.triggered.connect(lambda: self.insertionRequested.emit("custom", 0))
+        self._show_context_menu(menu, global_position)
+
     def _show_context_menu(self, menu: QMenu, global_position) -> None:
         if self._context_menu is not None:
             previous_menu = self._context_menu
@@ -457,6 +565,10 @@ class LensLayoutView(QGraphicsView):
 
     def _interactive_item_at(self, position):
         items_here = self.items(position)
+        if self.mapToScene(position).x() < -0.5:
+            for item in items_here:
+                if item.data(ROLE_KIND) == "front_gap":
+                    return item
         for item in items_here:
             if item.data(ROLE_KIND) == "gap" and item.zValue() >= 5:
                 return item
@@ -506,12 +618,15 @@ class LensLayoutView(QGraphicsView):
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
         self.scale(factor, factor)
         self._fit_on_resize = False
+        self._position_gap_spins()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         if self._fit_on_resize and self.scene().items():
             self.fitInView(self.scene().sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._position_gap_spins()
 
     def reset_view(self) -> None:
         self._fit_on_resize = True
         self.fitInView(self.scene().sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._position_gap_spins()

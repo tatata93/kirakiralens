@@ -18,7 +18,7 @@ def main(argv: list[str] | None = None) -> int:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
     from PySide6.QtCore import QTimer
-    from PySide6.QtGui import QFont
+    from PySide6.QtGui import QFont, QFontDatabase
     from PySide6.QtWidgets import QApplication
 
     from .ui.main_window import MainWindow
@@ -26,7 +26,20 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv[:1])
     app.setApplicationName("KiraKiraLens")
     app.setOrganizationName("KiraKiraLens")
-    app.setFont(QFont("Yu Gothic UI", 9))
+    font_family = "Yu Gothic UI"
+    for font_path in (
+        Path("C:/Windows/Fonts/NotoSansJP-VF.ttf"),
+        Path("C:/Windows/Fonts/meiryo.ttc"),
+        Path("C:/Windows/Fonts/YuGothM.ttc"),
+    ):
+        if not font_path.exists():
+            continue
+        font_id = QFontDatabase.addApplicationFont(str(font_path))
+        families = QFontDatabase.applicationFontFamilies(font_id)
+        if families:
+            font_family = families[0]
+            break
+    app.setFont(QFont(font_family, 9))
     app.setStyleSheet(
         """
         QMainWindow, QWidget { background: #f5f7f6; color: #26322f; }
@@ -48,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         QGroupBox::title { subcontrol-origin: margin; left: 5px; padding: 0 4px; }
         """
     )
-    window = MainWindow(analyze_on_start=not bool(args.screenshot))
+    window = MainWindow(analyze_on_start=False)
     window.show()
 
     if args.screenshot:

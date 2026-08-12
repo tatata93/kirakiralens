@@ -24,6 +24,7 @@ from ..catalog.database import CatalogRepository
 from ..catalog.edmund import default_paths, import_edmund_catalog
 from ..domain import LensElement, OpticalDesign, SurfaceSpec, new_id
 from ..optics.optiland_adapter import FirstOrderAnalysis
+from ..optics.signature import analysis_signature, design_signature
 from ..persistence import load_project, save_project
 from .analysis_controller import AnalysisController
 from .diagram_editor import DiagramEditor
@@ -32,7 +33,7 @@ from .panels import CatalogPanel, InspectorPanel, SurfaceTable, spin_box
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, repository_root: Path | None = None, analyze_on_start: bool = True):
+    def __init__(self, repository_root: Path | None = None, analyze_on_start: bool = False):
         super().__init__()
         self.repository_root = repository_root or Path(__file__).resolve().parents[3]
         self.database_path = self.repository_root / "data" / "generated" / "edmund_catalog.sqlite3"
@@ -44,8 +45,11 @@ class MainWindow(QMainWindow):
         self.selected_surface = 0
         self.selected_kind = "surface"
         self._selected_catalog_product: int | None = None
+        self._performance_window = None
         self._analysis_generation = 0
-        self._analysis_controller = AnalysisController(self)
+        self._design_signature = design_signature(self.design)
+        self._analysis_signature = analysis_signature(self.design)
+        self._analysis_controller = AnalysisController(self.repository_root / ".tmp" / "matplotlib", self)
         self._analysis_debounce = QTimer(self)
         self._analysis_debounce.setSingleShot(True)
         self._analysis_debounce.setInterval(650)
@@ -76,6 +80,7 @@ class MainWindow(QMainWindow):
         self.save_as_action = QAction("名前を付けて保存", self)
         self.analyze_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_BrowserReload), "再解析", self)
         self.analyze_action.setShortcut(QKeySequence("F5"))
+        self.performance_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon), "性能評価", self)
         self.reset_view_action = QAction("全体表示", self)
         self.import_action = QAction("Edmund Excelを再取込", self)
 
@@ -84,7 +89,7 @@ class MainWindow(QMainWindow):
         toolbar.setObjectName("designToolbar")
         toolbar.setMovable(False)
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        for action in (self.new_action, self.open_action, self.save_action, self.analyze_action):
+        for action in (self.new_action, self.open_action, self.save_action, self.analyze_action, self.performance_action):
             toolbar.addAction(action)
         toolbar.addSeparator()
 
@@ -168,7 +173,7 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("ファイル")
         file_menu.addActions([self.new_action, self.open_action, self.save_action, self.save_as_action])
         design_menu = self.menuBar().addMenu("設計")
-        design_menu.addActions([self.analyze_action, self.reset_view_action])
+        design_menu.addActions([self.analyze_action, self.performance_action, self.reset_view_action])
         design_menu.addAction(self.surface_dock.toggleViewAction())
         catalog_menu = self.menuBar().addMenu("カタログ")
         catalog_menu.addAction(self.import_action)
@@ -180,7 +185,8 @@ class MainWindow(QMainWindow):
         self.open_action.triggered.connect(self.open_design)
         self.save_action.triggered.connect(self.save_design)
         self.save_as_action.triggered.connect(lambda: self.save_design(save_as=True))
-        self.analyze_action.triggered.connect(self.schedule_analysis)
+        self.analyze_action.triggered.connect(lambda: self.schedule_analysis(force=True))
+        self.performance_action.triggered.connect(self.open_performance_window)
         self.reset_view_action.triggered.connect(self.lens_view.reset_view)
         self.import_action.triggered.connect(self.reimport_catalog)
         self.catalog_panel.productActivated.connect(self.insert_catalog_product)
@@ -552,15 +558,26 @@ class MainWindow(QMainWindow):
         self.lens_view.set_selected(kind, self.selected_element, self.selected_surface)
 
     def _design_changed(self) -> None:
-        self.current_analysis = FirstOrderAnalysis(valid=False, engine="Optiland 0.5.9", error="解析待ち")
-        self._analysis_generation += 1
+        signature = design_signature(self.design)
+        if signature == self._design_signature:
+            return
+        self._design_signature = signature
+        optical_signature = analysis_signature(self.design)
+        optical_change = optical_signature != self._analysis_signature
+        self._analysis_signature = optical_signature
+        if optical_change:
+            self.current_analysis = FirstOrderAnalysis(valid=False, engine="Optiland 0.5.9", error="解析待ち")
+            self._analysis_generation += 1
         self._refresh_all()
-        self._analysis_debounce.start()
+        if self._performance_window is not None:
+            self._performance_window.set_design(self.design)
+        if optical_change:
+            self._analysis_debounce.start()
 
-    def schedule_analysis(self) -> None:
+    def schedule_analysis(self, force: bool = False) -> None:
         self._analysis_debounce.stop()
         generation = self._analysis_generation
-        self._analysis_controller.submit(generation, self.design)
+        self._analysis_controller.submit(generation, self.design, force=force)
 
     @Slot(int, object)
     def _analysis_finished(self, generation: int, result: FirstOrderAnalysis) -> None:
@@ -634,7 +651,20 @@ class MainWindow(QMainWindow):
         self.catalog_panel.refresh()
         self.statusBar().showMessage(f"{result.accepted}品を設計可能として取り込みました", 8000)
 
+    def open_performance_window(self) -> None:
+        if self._performance_window is None:
+            from .performance_window import PerformanceWindow
+
+            self._performance_window = PerformanceWindow(self.design, self.repository_root, self)
+        else:
+            self._performance_window.set_design(self.design)
+        self._performance_window.show()
+        self._performance_window.raise_()
+        self._performance_window.activateWindow()
+
     def closeEvent(self, event) -> None:
         self._analysis_debounce.stop()
         self._analysis_controller.shutdown()
+        if self._performance_window is not None:
+            self._performance_window.shutdown()
         super().closeEvent(event)

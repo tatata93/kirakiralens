@@ -32,7 +32,7 @@ class OptilandAdapter:
     """Translate the persistent domain model to the pinned Optiland API."""
 
     def to_optic(self, design: OpticalDesign) -> Any:
-        from optiland import optic
+        from optiland import optic, physical_apertures
 
         system = optic.Optic(design.name)
         system.add_surface(index=0, thickness=inf, comment="Object")
@@ -52,6 +52,10 @@ class OptilandAdapter:
                 geometry_parameters: dict[str, Any] = {"radius": radius, "conic": float(surface.conic)}
                 if surface_type == "even_asphere":
                     geometry_parameters["coefficients"] = list(surface.asphere_coefficients)
+                clear_diameter = min(
+                    element.outer_diameter_mm,
+                    surface.clear_aperture_mm or element.outer_diameter_mm,
+                )
                 system.add_surface(
                     index=surface_number,
                     thickness=float(thickness),
@@ -59,6 +63,7 @@ class OptilandAdapter:
                     material=material,
                     is_stop=(element_index == design.stop_after_element and local_index == stop_surface_index),
                     comment=surface.comment or self._surface_comment(element.manufacturer, element.part_number, local_index),
+                    aperture=physical_apertures.RadialAperture(r_max=float(clear_diameter) / 2.0),
                     **geometry_parameters,
                 )
                 surface_number += 1
