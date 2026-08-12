@@ -1,0 +1,134 @@
+{
+  "started_at": "2026-08-12T16:25:48.722572+00:00",
+  "completed_at": "2026-08-12T16:25:49.085201+00:00",
+  "manufacturer": "Edmund Optics",
+  "source_directory": "C:\\Users\\tak01\\github\\kirakiralens\\data\\source\\edmund",
+  "database_path": "C:\\Users\\tak01\\github\\kirakiralens\\data\\generated\\edmund_catalog.sqlite3",
+  "csv_path": "C:\\Users\\tak01\\github\\kirakiralens\\data\\generated\\edmund_catalog.csv",
+  "accepted": 918,
+  "incomplete": 2,
+  "rejected": 0,
+  "duplicates": 0,
+  "files": [
+    {
+      "file": "Best-Form-Spherical-Lenses.xlsx",
+      "sheet": "EO_4353",
+      "sha256": "b0805a1ac746c329134b2da9a4f15a46f5ff360bb8f1c722d6bdf88326da35a2",
+      "rows": 8,
+      "accepted": 8,
+      "incomplete": 0,
+      "rejected": 0,
+      "duplicates": 0
+    },
+    {
+      "file": "UV-Fused-Silica-Double-Concave-DCV-Lenses.xlsx",
+      "sheet": "EO_2030",
+      "sha256": "5483a84dd6999f7a6446e97b5a8c459df7060fd5ff5969b9189372526c449348",
+      "rows": 14,
+      "accepted": 14,
+      "incomplete": 0,
+      "rejected": 0,
+      "duplicates": 0
+    },
+    {
+      "file": "UV-Fused-Silica-Double-Convex-DCX-Lenses.xlsx",
+      "sheet": "EO_2028",
+      "sha256": "2f0c00e1f3686328cdd7bced2b271ab6acc9152f804f974a74f15c4383f7a188",
+      "rows": 245,
+      "accepted": 245,
+      "incomplete": 0,
+      "rejected": 0,
+      "duplicates": 0
+    },
+    {
+      "file": "UV-Fused-Silica-Plano-Concave-PCV-Lenses.xlsx",
+      "sheet": "EO_2029",
+      "sha256": "6adea2b1f35062c021c9b77985a354ba2b355297d98073b41655aeafd2e3b895",
+      "rows": 68,
+      "accepted": 68,
+      "incomplete": 0,
+      "rejected": 0,
+      "duplicates": 0
+    },
+    {
+      "file": "UV-Fused-Silica-Plano-Convex-PCX-Lenses---VIS-0-Coated.xlsx",
+      "sheet": "EO_4231",
+      "sha256": "3548099bb884d8d2457e74014505d75cbb9e414ae64827523c48588ec7646988",
+      "rows": 75,
+      "accepted": 75,
+      "incomplete": 0,
+      "rejected": 0,
+      "duplicates": 0
+    },
+    {
+      "file": "VIS-0-Coated-Achromatic-Lenses (2).xlsx",
+      "sheet": "EO_2684",
+      "sha256": "9a52c3d44bd8ad4b44aecf8b4789df8e28d48871c6358bd835e9df86c0847f5b",
+      "rows": 154,
+      "accepted": 152,
+      "incomplete": 2,
+      "rejected": 0,
+      "duplicates": 0
+    },
+    {
+      "file": "VIS-0-Coated-Double-Concave-DCV-Lenses (1).xlsx",
+      "sheet": "EO_2720",
+      "sha256": "87b7e2dac03139dbb067ac6801e274de9639b71d13afdaaaf245c2d4b09fc397",
+      "rows": 13,
+      "accepted": 13,
+      "incomplete": 0,
+      "rejected": 0,
+      "duplicates": 0
+    },
+    {
+      "file": "VIS-0-Coated-Double-Convex-DCX-Lenses (2).xlsx",
+      "sheet": "EO_2538",
+      "sha256": "cb466b524f464c7ffdace4dc1ea14ba24469dc445b22a90800d1bdd5d0901a4f",
+      "rows": 85,
+      "accepted": 85,
+      "incomplete": 0,
+      "rejected": 0,
+      "duplicates": 0
+    },
+    {
+      "file": "VIS-0-Coated-Plano-Concave-PCV-Lenses (1).xlsx",
+      "sheet": "EO_2718",
+      "sha256": "838087704458d663d00fa75beb2903a353ba634fbdf65948d00b05e176e1a3b4",
+      "rows": 26,
+      "accepted": 26,
+      "incomplete": 0,
+      "rejected": 0,
+      "duplicates": 0
+    },
+    {
+      "file": "VIS-0-Coated-Plano-Convex-PCX-Lenses (2).xlsx",
+      "sheet": "EO_2537",
+      "sha256": "0497fb07d22d8e1d9c87c6088d733ef8f25480109b030c1d1dbeeb0198553764",
+      "rows": 232,
+      "accepted": 232,
+      "incomplete": 0,
+      "rejected": 0,
+      "duplicates": 0
+    }
+  ],
+  "issues": [
+    {
+      "file": "VIS-0-Coated-Achromatic-Lenses (2).xlsx",
+      "row": 114,
+      "part_number": "67-332",
+      "status": "incomplete",
+      "missing": [
+        "R1/R2/R3 and CT1/CT2"
+      ]
+    },
+    {
+      "file": "VIS-0-Coated-Achromatic-Lenses (2).xlsx",
+      "row": 141,
+      "part_number": "67-333",
+      "status": "incomplete",
+      "missing": [
+        "R1/R2/R3 and CT1/CT2"
+      ]
+    }
+  ]
+}
