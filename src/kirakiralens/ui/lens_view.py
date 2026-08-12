@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QGraphicsSimpleTextItem,
     QGraphicsView,
     QMenu,
+    QToolTip,
 )
 
 from ..domain import LensElement, OpticalDesign, SurfaceSpec
@@ -26,6 +27,8 @@ ROLE_SURFACE = 2
 class LensLayoutView(QGraphicsView):
     selectionRequested = Signal(str, int, int)
     insertionRequested = Signal(str, int)
+    gapChangeRequested = Signal(int, float)
+    elementActionRequested = Signal(str, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -40,6 +43,8 @@ class LensLayoutView(QGraphicsView):
         self._analysis: FirstOrderAnalysis | None = None
         self._selected: tuple[str, int, int] | None = None
         self._fit_on_resize = True
+        self._gap_drag: tuple[int, float, float] | None = None
+        self._gap_preview_value = 0.0
 
     def set_design(self, design: OpticalDesign, analysis: FirstOrderAnalysis | None = None) -> None:
         self._design = design
@@ -96,6 +101,8 @@ class LensLayoutView(QGraphicsView):
                 item.setData(ROLE_ELEMENT, element_index)
                 item.setData(ROLE_SURFACE, region_index)
                 item.setToolTip(self._element_tooltip(element))
+                item.setZValue(1)
+                item.setCursor(Qt.CursorShape.PointingHandCursor)
                 scene.addItem(item)
 
             for surface_index, (surface, z) in enumerate(zip(element.surfaces, surface_z, strict=True)):
@@ -108,7 +115,20 @@ class LensLayoutView(QGraphicsView):
                 surface_item.setData(ROLE_SURFACE, surface_index)
                 radius_text = "Plane" if surface.is_plane else f"R {surface.radius_mm:.3f} mm"
                 surface_item.setToolTip(f"Surface {surface_index + 1}\n{radius_text}\nCA {surface.clear_aperture_mm or 0:.2f} mm")
+                surface_item.setZValue(4)
                 scene.addItem(surface_item)
+
+                hit_item = QGraphicsPathItem(path)
+                hit_pen = QPen(QColor(0, 0, 0, 1), 9)
+                hit_pen.setCosmetic(True)
+                hit_item.setPen(hit_pen)
+                hit_item.setData(ROLE_KIND, "surface")
+                hit_item.setData(ROLE_ELEMENT, element_index)
+                hit_item.setData(ROLE_SURFACE, surface_index)
+                hit_item.setToolTip(surface_item.toolTip())
+                hit_item.setCursor(Qt.CursorShape.PointingHandCursor)
+                hit_item.setZValue(7)
+                scene.addItem(hit_item)
 
             selected_element = self._selected and self._selected[1] == element_index
             if selected_element:
@@ -125,18 +145,26 @@ class LensLayoutView(QGraphicsView):
             label.setBrush(QColor("#26322f"))
             label.setScale(0.18)
             label.setPos(surface_z[0], -element.outer_diameter_mm / 2 - 4.2)
+            label.setZValue(5)
             scene.addItem(label)
 
             gap_start = surface_z[-1]
             gap_end = gap_start + element.gap_after_mm
-            gap_rect = QGraphicsRectItem(QRectF(gap_start, -maximum_radius, max(gap_end - gap_start, 0.2), 2 * maximum_radius))
-            gap_rect.setPen(QPen(Qt.PenStyle.NoPen))
-            gap_rect.setBrush(QColor(0, 0, 0, 1))
+            gap_rect = QGraphicsRectItem(QRectF(gap_start, -maximum_radius, max(gap_end - gap_start, 0.8), 2 * maximum_radius))
+            selected_gap = self._selected == ("gap", element_index, -1)
+            gap_rect.setPen(QPen(QColor("#d28b19"), 0, Qt.PenStyle.DashLine) if selected_gap else QPen(Qt.PenStyle.NoPen))
+            gap_rect.setBrush(QColor(210, 139, 25, 28) if selected_gap else QColor(0, 0, 0, 1))
             gap_rect.setData(ROLE_KIND, "gap")
             gap_rect.setData(ROLE_ELEMENT, element_index)
             gap_rect.setData(ROLE_SURFACE, -1)
-            gap_rect.setToolTip(f"Air gap {element.gap_after_mm:.3f} mm\nRight-click to insert")
+            lock_text = " (固定中)" if element.gap_locked else ""
+            gap_rect.setToolTip(f"空気間隔 {element.gap_after_mm:.3f} mm{lock_text}\n横ドラッグで変更 / 右クリックで挿入")
+            gap_rect.setCursor(Qt.CursorShape.SizeHorCursor)
+            gap_rect.setZValue(0)
             scene.addItem(gap_rect)
+            if element_index < len(design.elements) - 1:
+                dimension_y = maximum_radius + 2.5 + (element_index % 2) * 3.0
+                self._draw_gap_dimension(element_index, gap_start, gap_end, dimension_y)
 
             if element_index == design.stop_after_element:
                 stop_pen = QPen(QColor("#b3423f"), 0)
@@ -186,6 +214,34 @@ class LensLayoutView(QGraphicsView):
         label.setScale(0.17)
         label.setPos((start + end) / 2 - 8, y + 0.8)
         self.scene().addItem(label)
+
+    def _draw_gap_dimension(self, element_index: int, start: float, end: float, y: float) -> None:
+        selected = self._selected == ("gap", element_index, -1)
+        color = QColor("#d28b19" if selected else "#77817d")
+        pen = QPen(color, 0)
+        pen.setCosmetic(True)
+        for line in (
+            self.scene().addLine(start, y, end, y, pen),
+            self.scene().addLine(start, y - 0.8, start, y + 0.8, pen),
+            self.scene().addLine(end, y - 0.8, end, y + 0.8, pen),
+        ):
+            line.setZValue(2)
+        label = QGraphicsSimpleTextItem(f"{self._design.elements[element_index].gap_after_mm:.2f}")
+        label.setBrush(color)
+        label.setScale(0.15)
+        label.setPos((start + end) / 2 - 2.2, y - 2.8)
+        label.setZValue(2)
+        self.scene().addItem(label)
+        hit_item = QGraphicsRectItem(QRectF(start, y - 1.5, max(end - start, 0.8), 3.0))
+        hit_item.setPen(QPen(Qt.PenStyle.NoPen))
+        hit_item.setBrush(QColor(0, 0, 0, 1))
+        hit_item.setData(ROLE_KIND, "gap")
+        hit_item.setData(ROLE_ELEMENT, element_index)
+        hit_item.setData(ROLE_SURFACE, -1)
+        hit_item.setToolTip("横ドラッグでレンズ間隔を変更")
+        hit_item.setCursor(Qt.CursorShape.SizeHorCursor)
+        hit_item.setZValue(6)
+        self.scene().addItem(hit_item)
 
     @staticmethod
     def _geometry(design: OpticalDesign) -> tuple[list[list[float]], float]:
@@ -251,30 +307,89 @@ class LensLayoutView(QGraphicsView):
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            item = self.itemAt(event.position().toPoint())
-            if item is not None and item.data(ROLE_KIND):
+            item = self._interactive_item_at(event.position().toPoint())
+            if item is not None:
                 kind = str(item.data(ROLE_KIND))
                 element = int(item.data(ROLE_ELEMENT))
                 surface = int(item.data(ROLE_SURFACE))
                 self.selectionRequested.emit(kind, element, surface)
+                if kind == "gap" and self._design is not None and not self._design.elements[element].gap_locked:
+                    self._gap_drag = (element, self._design.elements[element].gap_after_mm, self.mapToScene(event.position().toPoint()).x())
+                    self._gap_preview_value = self._design.elements[element].gap_after_mm
                 event.accept()
                 return
         super().mousePressEvent(event)
 
+    def mouseMoveEvent(self, event) -> None:
+        if self._gap_drag is not None and self._design is not None:
+            element_index, initial_value, start_x = self._gap_drag
+            element = self._design.elements[element_index]
+            value = initial_value + self.mapToScene(event.position().toPoint()).x() - start_x
+            value = max(element.gap_min_mm, value)
+            if element.gap_max_mm is not None:
+                value = min(element.gap_max_mm, value)
+            self._gap_preview_value = value
+            QToolTip.showText(event.globalPosition().toPoint(), f"間隔 {value:.3f} mm", self)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._gap_drag is not None:
+            element_index, initial_value, _ = self._gap_drag
+            value = self._gap_preview_value
+            self._gap_drag = None
+            if abs(value - initial_value) > 1e-6:
+                self.gapChangeRequested.emit(element_index, value)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     def contextMenuEvent(self, event) -> None:
-        item = self.itemAt(event.pos())
-        if item is None or item.data(ROLE_KIND) != "gap":
+        item = self._interactive_item_at(event.pos())
+        if item is None:
             super().contextMenuEvent(event)
             return
+        kind = str(item.data(ROLE_KIND))
         element_index = int(item.data(ROLE_ELEMENT))
+        self.selectionRequested.emit(kind, element_index, int(item.data(ROLE_SURFACE)))
         menu = QMenu(self)
-        catalog_action = menu.addAction("選択中のカタログレンズを挿入")
-        custom_action = menu.addAction("カスタムレンズを挿入")
+        if kind == "gap":
+            catalog_action = menu.addAction("選択中のカタログレンズを挿入")
+            custom_action = menu.addAction("カスタムレンズを挿入")
+            chosen = menu.exec(event.globalPos())
+            if chosen is catalog_action:
+                self.insertionRequested.emit("catalog", element_index + 1)
+            elif chosen is custom_action:
+                self.insertionRequested.emit("custom", element_index + 1)
+            return
+
+        reverse_action = menu.addAction("レンズを反転")
+        customize_action = None
+        if self._design is not None and self._design.elements[element_index].is_catalog:
+            customize_action = menu.addAction("カスタム化")
+        menu.addSeparator()
+        delete_action = menu.addAction("レンズを削除")
         chosen = menu.exec(event.globalPos())
-        if chosen is catalog_action:
-            self.insertionRequested.emit("catalog", element_index + 1)
-        elif chosen is custom_action:
-            self.insertionRequested.emit("custom", element_index + 1)
+        if chosen is reverse_action:
+            self.elementActionRequested.emit("reverse", element_index)
+        elif chosen is customize_action:
+            self.elementActionRequested.emit("customize", element_index)
+        elif chosen is delete_action:
+            self.elementActionRequested.emit("delete", element_index)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Delete and self._selected is not None and self._selected[0] in {"element", "surface"}:
+            self.elementActionRequested.emit("delete", self._selected[1])
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _interactive_item_at(self, position):
+        for item in self.items(position):
+            if item.data(ROLE_KIND) in {"surface", "element", "gap"}:
+                return item
+        return None
 
     def wheelEvent(self, event) -> None:
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15

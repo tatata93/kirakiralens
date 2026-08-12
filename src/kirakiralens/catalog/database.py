@@ -90,6 +90,8 @@ class CatalogProduct:
     effective_focal_length_mm: float | None
     back_focal_length_mm: float | None
     coating: str
+    wavelength_min_nm: float | None
+    wavelength_max_nm: float | None
     materials: str
     designable: bool
 
@@ -117,10 +119,19 @@ class CatalogRepository:
         search: str = "",
         shape: str = "",
         material: str = "",
+        coating: str = "",
+        min_diameter_mm: float | None = None,
         max_diameter_mm: float | None = None,
+        min_clear_aperture_mm: float | None = None,
+        min_efl_mm: float | None = None,
+        max_efl_mm: float | None = None,
+        power: str = "",
+        wavelength_nm: float | None = None,
         manufacturer: str = "",
         designable_only: bool = True,
-        limit: int = 500,
+        sort: str = "target_efl",
+        target_efl_mm: float = 50.0,
+        limit: int = 1000,
     ) -> list[CatalogProduct]:
         if not self.available():
             return []
@@ -135,15 +146,45 @@ class CatalogRepository:
         if material:
             clauses.append("EXISTS (SELECT 1 FROM surfaces sm WHERE sm.product_id=p.id AND sm.material_after=?)")
             params.append(material)
+        if coating:
+            clauses.append("p.coating = ?")
+            params.append(coating)
+        if min_diameter_mm is not None:
+            clauses.append("p.outer_diameter_mm >= ?")
+            params.append(min_diameter_mm)
         if max_diameter_mm is not None:
             clauses.append("p.outer_diameter_mm <= ?")
             params.append(max_diameter_mm)
+        if min_clear_aperture_mm is not None:
+            clauses.append("p.clear_aperture_mm >= ?")
+            params.append(min_clear_aperture_mm)
+        if min_efl_mm is not None:
+            clauses.append("p.effective_focal_length_mm >= ?")
+            params.append(min_efl_mm)
+        if max_efl_mm is not None:
+            clauses.append("p.effective_focal_length_mm <= ?")
+            params.append(max_efl_mm)
+        if power == "positive":
+            clauses.append("p.effective_focal_length_mm > 0")
+        elif power == "negative":
+            clauses.append("p.effective_focal_length_mm < 0")
+        if wavelength_nm is not None:
+            clauses.append("p.wavelength_min_nm <= ? AND p.wavelength_max_nm >= ?")
+            params.extend([wavelength_nm, wavelength_nm])
         if manufacturer:
             clauses.append("m.name = ?")
             params.append(manufacturer)
         if designable_only:
             clauses.append("p.designable = 1")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        order_by = {
+            "target_efl": "ABS(ABS(COALESCE(p.effective_focal_length_mm, 1e9)) - ?), p.outer_diameter_mm DESC, p.part_number",
+            "diameter_desc": "p.outer_diameter_mm DESC, ABS(COALESCE(p.effective_focal_length_mm, 1e9)), p.part_number",
+            "efl_asc": "p.effective_focal_length_mm, p.outer_diameter_mm DESC, p.part_number",
+            "part_number": "m.name, p.part_number",
+        }.get(sort, "ABS(ABS(COALESCE(p.effective_focal_length_mm, 1e9)) - ?), p.outer_diameter_mm DESC, p.part_number")
+        if sort == "target_efl" or sort not in {"diameter_desc", "efl_asc", "part_number"}:
+            params.append(abs(target_efl_mm))
         query = f"""
             SELECT p.*, m.name AS manufacturer,
                    GROUP_CONCAT(DISTINCT CASE WHEN s.material_after != 'air' THEN s.material_after END) AS materials
@@ -152,7 +193,7 @@ class CatalogRepository:
             LEFT JOIN surfaces s ON s.product_id=p.id
             {where}
             GROUP BY p.id
-            ORDER BY ABS(COALESCE(p.effective_focal_length_mm, 1e9)), p.outer_diameter_mm, p.part_number
+            ORDER BY {order_by}
             LIMIT ?
         """
         params.append(limit)
@@ -171,6 +212,8 @@ class CatalogRepository:
                 effective_focal_length_mm=row["effective_focal_length_mm"],
                 back_focal_length_mm=row["back_focal_length_mm"],
                 coating=row["coating"] or "",
+                wavelength_min_nm=row["wavelength_min_nm"],
+                wavelength_max_nm=row["wavelength_max_nm"],
                 materials=row["materials"] or "",
                 designable=bool(row["designable"]),
             )
@@ -188,6 +231,10 @@ class CatalogRepository:
             elif column == "material":
                 rows = connection.execute(
                     "SELECT DISTINCT material_after FROM surfaces WHERE material_after != 'air' ORDER BY material_after"
+                ).fetchall()
+            elif column == "coating":
+                rows = connection.execute(
+                    "SELECT DISTINCT coating FROM products WHERE coating != '' ORDER BY coating"
                 ).fetchall()
             else:
                 raise ValueError(f"Unsupported filter column: {column}")

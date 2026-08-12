@@ -58,5 +58,21 @@ def test_supplied_edmund_files_import_to_normalized_database(tmp_path: Path) -> 
     element = repository.element_from_product(achromat.id)
     assert len(element.surfaces) == 3
     assert [surface.material_after for surface in element.surfaces] == ["N-PSK53A", "N-LASF9", "air"]
+
+    photographic = repository.query_products(
+        min_diameter_mm=20,
+        max_diameter_mm=50,
+        min_clear_aperture_mm=15,
+        power="positive",
+        target_efl_mm=50,
+        sort="target_efl",
+        limit=20,
+    )
+    assert photographic
+    assert all(20 <= product.outer_diameter_mm <= 50 for product in photographic)
+    assert all(product.clear_aperture_mm >= 15 for product in photographic)
+    assert all(product.effective_focal_length_mm > 0 for product in photographic)
+    assert abs(photographic[0].effective_focal_length_mm - 50) <= abs(photographic[-1].effective_focal_length_mm - 50)
+    assert "Uncoated" in repository.filter_values("coating")
     with csv_path.open(encoding="utf-8-sig", newline="") as source:
         assert sum(1 for _ in csv.DictReader(source)) == 920

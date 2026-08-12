@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         QGroupBox::title { subcontrol-origin: margin; left: 5px; padding: 0 4px; }
         """
     )
-    window = MainWindow()
+    window = MainWindow(analyze_on_start=not bool(args.screenshot))
     window.show()
 
     if args.screenshot:
@@ -56,9 +56,10 @@ def main(argv: list[str] | None = None) -> int:
 
         def capture() -> None:
             window.grab().save(str(output))
+            window.close()
             app.quit()
 
-        QTimer.singleShot(9000, capture)
+        QTimer.singleShot(1500, capture)
     return app.exec()
 
 

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
+    QStyle,
 )
 
 from ..catalog.database import CatalogProduct, CatalogRepository
@@ -63,8 +64,14 @@ class CatalogPanel(QWidget):
         layout.setSpacing(7)
 
         filters = QGridLayout()
+        filters.setHorizontalSpacing(6)
+        filters.setVerticalSpacing(5)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("型番・名称")
+        self.search.setPlaceholderText("型番・名称を検索")
+        self.manufacturer = QComboBox()
+        self.manufacturer.addItem("全メーカー", "")
+        for value in repository.filter_values("manufacturer"):
+            self.manufacturer.addItem(value, value)
         self.shape = QComboBox()
         self.shape.addItem("全形状", "")
         for value in repository.filter_values("shape"):
@@ -73,31 +80,114 @@ class CatalogPanel(QWidget):
         self.material.addItem("全硝材", "")
         for value in repository.filter_values("material"):
             self.material.addItem(value, value)
-        self.max_diameter = spin_box(0, 500, 1)
-        self.max_diameter.setSpecialValueText("径制限なし")
+        self.coating = QComboBox()
+        self.coating.addItem("全コーティング", "")
+        for value in repository.filter_values("coating"):
+            self.coating.addItem(value, value)
+
+        self.min_diameter = spin_box(0, 10000, 1)
+        self.min_diameter.setPrefix("最小 ")
+        self.min_diameter.setSpecialValueText("下限なし")
+        self.min_diameter.setValue(12.5)
+        self.min_diameter.setMaximumWidth(150)
+        self.max_diameter = spin_box(0, 10000, 1)
+        self.max_diameter.setPrefix("最大 ")
+        self.max_diameter.setSpecialValueText("上限なし")
         self.max_diameter.setValue(50)
+        self.max_diameter.setMaximumWidth(150)
+        diameter_row = QWidget()
+        diameter_layout = QHBoxLayout(diameter_row)
+        diameter_layout.setContentsMargins(0, 0, 0, 0)
+        diameter_layout.setSpacing(5)
+        diameter_layout.addWidget(self.min_diameter)
+        diameter_layout.addWidget(self.max_diameter)
+
+        self.min_clear_aperture = spin_box(0, 10000, 1)
+        self.min_clear_aperture.setPrefix("CA ≥ ")
+        self.min_clear_aperture.setSpecialValueText("CA制限なし")
+        self.power = QComboBox()
+        self.power.addItem("正負すべて", "")
+        self.power.addItem("正レンズ", "positive")
+        self.power.addItem("負レンズ", "negative")
+
+        self.efl_range_enabled = QCheckBox("EFL範囲")
+        self.min_efl = spin_box(-100000, 100000, 1)
+        self.min_efl.setPrefix("最小 ")
+        self.min_efl.setValue(-100)
+        self.min_efl.setMaximumWidth(150)
+        self.max_efl = spin_box(-100000, 100000, 1)
+        self.max_efl.setPrefix("最大 ")
+        self.max_efl.setValue(100)
+        self.max_efl.setMaximumWidth(150)
+        efl_row = QWidget()
+        efl_layout = QHBoxLayout(efl_row)
+        efl_layout.setContentsMargins(0, 0, 0, 0)
+        efl_layout.setSpacing(5)
+        efl_layout.addWidget(self.min_efl)
+        efl_layout.addWidget(self.max_efl)
+        self.min_efl.setEnabled(False)
+        self.max_efl.setEnabled(False)
+
+        self.wavelength = spin_box(0, 100000, 0, " nm")
+        self.wavelength.setPrefix("波長 ")
+        self.wavelength.setSpecialValueText("波長制限なし")
+        self.sort = QComboBox()
+        self.sort.addItem("目標 |EFL| に近い順", "target_efl")
+        self.sort.addItem("外径の大きい順", "diameter_desc")
+        self.sort.addItem("EFLの小さい順", "efl_asc")
+        self.sort.addItem("型番順", "part_number")
+        for combo in (self.manufacturer, self.shape, self.material, self.coating, self.power, self.sort):
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(8)
+            combo.setMinimumWidth(0)
+        self.target_efl = 50.0
+        self._design_f_number = 4.0
+        self._design_max_diameter = 50.0
+
         self.include_incomplete = QCheckBox("不完全データも表示")
-        filters.addWidget(self.search, 0, 0, 1, 2)
-        filters.addWidget(self.shape, 1, 0)
-        filters.addWidget(self.material, 1, 1)
-        filters.addWidget(self.max_diameter, 2, 0, 1, 2)
-        filters.addWidget(self.include_incomplete, 3, 0, 1, 2)
+        self.photo_filter_button = QPushButton("撮影用絞込")
+        self.photo_filter_button.setToolTip("設計の焦点距離、F値、最大径に合わせる")
+        self.clear_filter_button = QPushButton("全解除")
+        filters.addWidget(self.search, 0, 0, 1, 4)
+        filters.addWidget(self.manufacturer, 1, 0, 1, 2)
+        filters.addWidget(self.shape, 1, 2, 1, 2)
+        filters.addWidget(self.material, 2, 0, 1, 2)
+        filters.addWidget(self.coating, 2, 2, 1, 2)
+        filters.addWidget(QLabel("外径範囲"), 3, 0)
+        filters.addWidget(diameter_row, 3, 1, 1, 3)
+        filters.addWidget(self.min_clear_aperture, 4, 0, 1, 2)
+        filters.addWidget(self.power, 4, 2, 1, 2)
+        filters.addWidget(self.efl_range_enabled, 5, 0)
+        filters.addWidget(efl_row, 5, 1, 1, 3)
+        filters.addWidget(self.wavelength, 6, 0, 1, 2)
+        filters.addWidget(self.sort, 6, 2, 1, 2)
+        filters.addWidget(self.photo_filter_button, 7, 0)
+        filters.addWidget(self.clear_filter_button, 7, 1)
+        filters.addWidget(self.include_incomplete, 7, 2, 1, 2)
         layout.addLayout(filters)
 
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["型番", "形状", "径", "EFL", "硝材"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["型番", "形状", "外径", "CA", "EFL", "硝材"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
+        self.table.setMinimumWidth(0)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table, 1)
+
+        self.details = QLabel("部品を選択すると仕様を表示します")
+        self.details.setWordWrap(True)
+        self.details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.details.setMinimumHeight(42)
+        layout.addWidget(self.details)
 
         footer = QHBoxLayout()
         self.count_label = QLabel()
@@ -108,23 +198,57 @@ class CatalogPanel(QWidget):
         footer.addWidget(self.add_button)
         layout.addLayout(footer)
 
-        for widget in (self.search, self.shape, self.material, self.max_diameter, self.include_incomplete):
+        for widget in (
+            self.search,
+            self.manufacturer,
+            self.shape,
+            self.material,
+            self.coating,
+            self.min_diameter,
+            self.max_diameter,
+            self.min_clear_aperture,
+            self.power,
+            self.efl_range_enabled,
+            self.min_efl,
+            self.max_efl,
+            self.wavelength,
+            self.sort,
+            self.include_incomplete,
+        ):
             signal = getattr(widget, "textChanged", None) or getattr(widget, "currentIndexChanged", None) or getattr(widget, "valueChanged", None) or getattr(widget, "toggled")
             signal.connect(lambda *_: self._refresh_timer.start())
+        self.efl_range_enabled.toggled.connect(self.min_efl.setEnabled)
+        self.efl_range_enabled.toggled.connect(self.max_efl.setEnabled)
+        self.photo_filter_button.clicked.connect(self.apply_photo_filter)
+        self.clear_filter_button.clicked.connect(self.clear_filters)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.table.itemDoubleClicked.connect(lambda *_: self.activate_selected())
         self.add_button.clicked.connect(self.activate_selected)
         self.refresh()
 
     def refresh(self) -> None:
+        min_diameter = self.min_diameter.value() or None
         max_diameter = self.max_diameter.value() or None
+        min_clear_aperture = self.min_clear_aperture.value() or None
+        wavelength = self.wavelength.value() or None
+        efl_enabled = self.efl_range_enabled.isChecked()
         self._products = self.repository.query_products(
             search=self.search.text().strip(),
+            manufacturer=str(self.manufacturer.currentData() or ""),
             shape=str(self.shape.currentData() or ""),
             material=str(self.material.currentData() or ""),
+            coating=str(self.coating.currentData() or ""),
+            min_diameter_mm=min_diameter,
             max_diameter_mm=max_diameter,
+            min_clear_aperture_mm=min_clear_aperture,
+            min_efl_mm=self.min_efl.value() if efl_enabled else None,
+            max_efl_mm=self.max_efl.value() if efl_enabled else None,
+            power=str(self.power.currentData() or ""),
+            wavelength_nm=wavelength,
             designable_only=not self.include_incomplete.isChecked(),
-            limit=500,
+            sort=str(self.sort.currentData()),
+            target_efl_mm=self.target_efl,
+            limit=1000,
         )
         self.table.setRowCount(len(self._products))
         for row, product in enumerate(self._products):
@@ -132,18 +256,47 @@ class CatalogPanel(QWidget):
                 product.part_number,
                 SHAPE_LABELS.get(product.shape, product.shape),
                 "" if product.outer_diameter_mm is None else f"{product.outer_diameter_mm:g}",
+                "" if product.clear_aperture_mm is None else f"{product.clear_aperture_mm:g}",
                 "" if product.effective_focal_length_mm is None else f"{product.effective_focal_length_mm:g}",
                 product.materials,
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                if column in (2, 3):
+                if column in (2, 3, 4):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.table.setItem(row, column, item)
         total = self.repository.count_products()
-        suffix = "上限500件" if len(self._products) == 500 else f"全{total}件"
+        suffix = "上限1000件" if len(self._products) == 1000 else f"全{total}件"
         self.count_label.setText(f"{len(self._products)}件 / {suffix}")
         self.add_button.setEnabled(False)
+        self.details.setText("部品を選択すると仕様を表示します")
+
+    def set_design_targets(self, focal_length_mm: float, f_number: float, max_diameter_mm: float) -> None:
+        self.target_efl = abs(focal_length_mm)
+        self._design_f_number = f_number
+        self._design_max_diameter = max_diameter_mm
+        self.max_diameter.setValue(max_diameter_mm)
+        self._refresh_timer.start()
+
+    def apply_photo_filter(self) -> None:
+        self.min_diameter.setValue(self.target_efl / max(self._design_f_number, 0.1))
+        self.max_diameter.setValue(self._design_max_diameter)
+        self.power.setCurrentIndex(0)
+        self.sort.setCurrentIndex(self.sort.findData("target_efl"))
+        self._refresh_timer.start()
+
+    def clear_filters(self) -> None:
+        self.search.clear()
+        for combo in (self.manufacturer, self.shape, self.material, self.coating, self.power):
+            combo.setCurrentIndex(0)
+        self.min_diameter.setValue(0)
+        self.max_diameter.setValue(0)
+        self.min_clear_aperture.setValue(0)
+        self.efl_range_enabled.setChecked(False)
+        self.wavelength.setValue(0)
+        self.include_incomplete.setChecked(False)
+        self.sort.setCurrentIndex(self.sort.findData("target_efl"))
+        self._refresh_timer.start()
 
     def selected_product_id(self) -> int | None:
         row = self.table.currentRow()
@@ -160,6 +313,16 @@ class CatalogPanel(QWidget):
         product_id = self.selected_product_id()
         self.add_button.setEnabled(product_id is not None)
         if product_id is not None:
+            product = self._products[self.table.currentRow()]
+            wavelength = "-"
+            if product.wavelength_min_nm is not None and product.wavelength_max_nm is not None:
+                wavelength = f"{product.wavelength_min_nm:g}–{product.wavelength_max_nm:g} nm"
+            self.details.setText(
+                f"{product.manufacturer} {product.part_number}  {product.title}\n"
+                f"外径 {product.outer_diameter_mm or 0:g} / CA {product.clear_aperture_mm or 0:g} / "
+                f"EFL {product.effective_focal_length_mm or 0:g} / BFL {product.back_focal_length_mm or 0:g} mm\n"
+                f"{product.materials} / {product.coating or 'コーティングなし'} / {wavelength}"
+            )
             self.selectionChanged.emit(product_id)
 
 
@@ -167,6 +330,8 @@ class InspectorPanel(QWidget):
     designChanged = Signal()
     reverseRequested = Signal(int)
     customizeRequested = Signal(int)
+    deleteRequested = Signal(int)
+    surfaceSelectionRequested = Signal(int, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -183,8 +348,8 @@ class InspectorPanel(QWidget):
         self.name_edit = QLineEdit()
         self.identity_label = QLabel("-")
         self.identity_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.diameter = spin_box(0.1, 500)
-        self.gap = spin_box(0.0, 1000)
+        self.diameter = spin_box(0.1, 10000)
+        self.gap = spin_box(0.0, 100000)
         self.element_lock = QCheckBox("固定")
         self.diameter_lock = QCheckBox("径を固定")
         self.gap_lock = QCheckBox("間隔を固定")
@@ -198,22 +363,27 @@ class InspectorPanel(QWidget):
         button_row = QHBoxLayout()
         self.reverse_button = QPushButton("反転")
         self.customize_button = QPushButton("カスタム化")
+        self.delete_button = QPushButton(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon), "削除")
+        self.delete_button.setToolTip("選択中のレンズを設計から削除")
         button_row.addWidget(self.reverse_button)
         button_row.addWidget(self.customize_button)
+        button_row.addWidget(self.delete_button)
         element_form.addRow(button_row)
         layout.addWidget(element_group)
 
         surface_group = QGroupBox("面")
         surface_form = QFormLayout(surface_group)
-        self.surface_label = QLabel("-")
+        self.surface_selector = QComboBox()
         self.plane = QCheckBox("平面")
         self.radius = spin_box(-100000, 100000)
         self.material = QLineEdit()
-        self.clear_aperture = spin_box(0.0, 500)
+        self.clear_aperture = spin_box(0.0, 10000)
         self.radius_lock = QCheckBox("曲率を固定")
         self.material_lock = QCheckBox("硝材を固定")
         self.aperture_lock = QCheckBox("有効径を固定")
-        surface_form.addRow("選択", self.surface_label)
+        self.catalog_surface_note = QLabel("")
+        self.catalog_surface_note.setWordWrap(True)
+        surface_form.addRow("編集する面", self.surface_selector)
         surface_form.addRow(self.plane)
         surface_form.addRow("曲率半径", self.radius)
         surface_form.addRow("面後の媒質", self.material)
@@ -221,6 +391,7 @@ class InspectorPanel(QWidget):
         surface_form.addRow(self.radius_lock)
         surface_form.addRow(self.material_lock)
         surface_form.addRow(self.aperture_lock)
+        surface_form.addRow(self.catalog_surface_note)
         layout.addWidget(surface_group)
 
         analysis_group = QGroupBox("一次解析")
@@ -251,11 +422,17 @@ class InspectorPanel(QWidget):
             signal.connect(self._apply_surface)
         self.reverse_button.clicked.connect(lambda: self.reverseRequested.emit(self.element_index))
         self.customize_button.clicked.connect(lambda: self.customizeRequested.emit(self.element_index))
+        self.delete_button.clicked.connect(lambda: self.deleteRequested.emit(self.element_index))
+        self.surface_selector.currentIndexChanged.connect(self._surface_selected)
 
     def set_selection(self, design: OpticalDesign, element_index: int, surface_index: int = -1) -> None:
         self.design = design
         self.element_index = element_index
-        self.surface_index = surface_index
+        if 0 <= element_index < len(design.elements):
+            surface_count = len(design.elements[element_index].surfaces)
+            self.surface_index = surface_index if 0 <= surface_index < surface_count else 0
+        else:
+            self.surface_index = -1
         self._load()
 
     def clear_selection(self) -> None:
@@ -296,11 +473,14 @@ class InspectorPanel(QWidget):
             self.gap_lock,
             self.reverse_button,
             self.customize_button,
+            self.delete_button,
+            self.surface_selector,
         ):
             widget.setEnabled(valid)
         if not valid:
             self.identity_label.setText("-")
-            self.surface_label.setText("-")
+            self.surface_selector.clear()
+            self.catalog_surface_note.clear()
             self._updating = False
             return
         element = self.design.elements[self.element_index]
@@ -315,6 +495,14 @@ class InspectorPanel(QWidget):
         self.customize_button.setEnabled(element.is_catalog)
         self.reverse_button.setEnabled(not element.orientation_locked)
 
+        self.surface_selector.clear()
+        for index, surface in enumerate(element.surfaces):
+            side = "入射面" if index == 0 else "射出面" if index == len(element.surfaces) - 1 else "接合面"
+            radius = "平面" if surface.is_plane else f"R {surface.radius_mm:g} mm"
+            self.surface_selector.addItem(f"S{index + 1}  {side}  ({radius})", index)
+        self.surface_selector.setCurrentIndex(self.surface_index)
+        self.catalog_surface_note.setText("カタログ品は処方を保持します。変更する場合は「カスタム化」を押してください。" if element.is_catalog else "")
+
         surface_valid = 0 <= self.surface_index < len(element.surfaces)
         for widget in (
             self.plane,
@@ -328,7 +516,6 @@ class InspectorPanel(QWidget):
             widget.setEnabled(surface_valid and not element.is_catalog)
         if surface_valid:
             surface = element.surfaces[self.surface_index]
-            self.surface_label.setText(f"S{self.surface_index + 1}")
             self.plane.setChecked(surface.is_plane)
             self.radius.setValue(0.0 if surface.is_plane else float(surface.radius_mm))
             self.radius.setEnabled(not surface.is_plane and not element.is_catalog)
@@ -338,8 +525,15 @@ class InspectorPanel(QWidget):
             self.material_lock.setChecked(surface.material_locked)
             self.aperture_lock.setChecked(surface.clear_aperture_locked)
         else:
-            self.surface_label.setText("面を選択")
+            self.surface_selector.setCurrentIndex(-1)
         self._updating = False
+
+    def _surface_selected(self, combo_index: int) -> None:
+        if self._updating or combo_index < 0 or self.element_index < 0:
+            return
+        self.surface_index = int(self.surface_selector.itemData(combo_index))
+        self._load()
+        self.surfaceSelectionRequested.emit(self.element_index, self.surface_index)
 
     def _apply_element(self) -> None:
         if self._updating or self.design is None or self.element_index < 0:
