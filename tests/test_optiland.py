@@ -16,6 +16,8 @@ def test_starter_prescription_matches_initial_targets(monkeypatch, tmp_path: Pat
     assert result.engine == "Optiland 0.5.9"
     assert abs(result.effective_focal_length_mm - 50.0) < 0.01
     assert abs(result.back_focal_length_mm - 45.46) < 0.01
+    assert result.image_distance_mm == design.elements[-1].gap_after_mm
+    assert abs(result.recommended_image_distance_mm - 45.46) < 0.01
     rays = trace_parallel_rays(design, result.refractive_indices)
     assert len(rays) == design.settings.layout_ray_count * len(design.settings.field_fractions)
     assert all(len(ray.points) == 7 for ray in rays)
@@ -56,3 +58,16 @@ def test_configured_fields_wavelengths_and_weights_reach_optiland(monkeypatch, t
     assert list(system.fields.y_fields) == [0.0, 12.5, 24.0]
     assert list(system.wavelengths.get_wavelengths()) == design.settings.wavelengths_um
     assert [wavelength.weight for wavelength in system.wavelengths.wavelengths] == [0.5, 2.0, 1.5]
+
+
+def test_recommended_image_distance_tracks_the_lens_focus(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    design = OpticalDesign.starter()
+    design.elements[-1].gap_after_mm = 30.0
+
+    result = OptilandAdapter().analyze_first_order(design)
+
+    assert result.valid, result.error
+    assert result.back_focal_length_mm == 30.0
+    assert result.image_distance_mm == 30.0
+    assert abs(result.recommended_image_distance_mm - 45.46) < 0.01

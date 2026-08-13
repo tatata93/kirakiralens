@@ -457,10 +457,13 @@ class DiagramEditor(QFrame):
             surface.conic_locked = self.conic_lock.isChecked()
             surface.asphere_locked = self.asphere_lock.isChecked()
         if is_last:
+            distance_changed = abs(element.gap_after_mm - self.surface_distance.value()) > 1e-9
             element.gap_after_mm = self.surface_distance.value()
             element.gap_locked = self.distance_lock.isChecked()
             if self.element_index == len(self.design.elements) - 1:
                 self.design.settings.back_focus_target_mm = element.gap_after_mm
+                if distance_changed:
+                    self.design.settings.auto_focus_enabled = False
         elif not element.is_catalog:
             surface.thickness_after_mm = self.surface_distance.value()
             surface.thickness_locked = self.distance_lock.isChecked()
@@ -473,6 +476,7 @@ class DiagramEditor(QFrame):
         if self._updating or self.design is None or self.kind not in {"element", "surface"}:
             return
         element = self.design.elements[self.element_index]
+        gap_changed = abs(element.gap_after_mm - self.element_gap.value()) > 1e-9
         element.name = self.element_name.text().strip() or element.name
         if not element.is_catalog:
             element.outer_diameter_mm = self.element_diameter.value()
@@ -485,12 +489,15 @@ class DiagramEditor(QFrame):
             self.design.stop_surface_index = len(element.surfaces) - 1
         if self.element_index == len(self.design.elements) - 1:
             self.design.settings.back_focus_target_mm = element.gap_after_mm
+            if gap_changed:
+                self.design.settings.auto_focus_enabled = False
         self.designChanged.emit()
 
     def _apply_gap(self) -> None:
         if self._updating or self.design is None or self.kind != "gap":
             return
         element = self.design.elements[self.element_index]
+        gap_changed = abs(element.gap_after_mm - self.gap_value.value()) > 1e-9
         minimum = self.gap_min.value()
         maximum = self.gap_max.value() or None
         if maximum is not None and maximum < minimum:
@@ -506,6 +513,8 @@ class DiagramEditor(QFrame):
             self.design.stop_surface_index = len(element.surfaces) - 1
         if self.element_index == len(self.design.elements) - 1:
             self.design.settings.back_focus_target_mm = element.gap_after_mm
+            if gap_changed:
+                self.design.settings.auto_focus_enabled = False
         self.designChanged.emit()
 
     def _zero_gap(self) -> None:

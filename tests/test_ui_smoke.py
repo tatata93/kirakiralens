@@ -11,6 +11,7 @@ from PySide6.QtGui import QContextMenuEvent, QMouseEvent
 from PySide6.QtWidgets import QApplication, QDoubleSpinBox
 
 from kirakiralens.ui.main_window import MainWindow
+from kirakiralens.optics.optiland_adapter import OptilandAdapter
 
 
 def test_main_window_constructs_with_generated_catalog() -> None:
@@ -173,6 +174,53 @@ def test_main_window_constructs_with_generated_catalog() -> None:
     window.redo()
     application.processEvents()
     assert window.design.settings.sensor_width_mm == 23.5
+    window.close()
+    application.processEvents()
+
+
+def test_surface_table_edits_every_surface_and_image_focus() -> None:
+    application = QApplication.instance() or QApplication([])
+    root = Path(__file__).resolve().parents[1]
+    window = MainWindow(root, analyze_on_start=False)
+    table = window.surface_table
+
+    expected_surfaces = sum(len(element.surfaces) for element in window.design.elements)
+    assert table.rowCount() == expected_surfaces + 2
+    assert [kind for kind, _, _ in table._row_map].count("surface") == expected_surfaces
+
+    rear_surface_row = 2
+    table.item(rear_surface_row, table.COL_RADIUS).setText("-80")
+    table.item(rear_surface_row, table.COL_MATERIAL).setText("air")
+    assert window.design.elements[0].surfaces[1].radius_mm == -80.0
+    assert window.design.elements[0].surfaces[1].material_after == "air"
+
+    last_surface_row = expected_surfaces
+    table.item(last_surface_row, table.COL_DISTANCE).setText("31.5")
+    assert window.design.elements[-1].gap_after_mm == 31.5
+    assert window.design.settings.auto_focus_enabled is False
+
+    window.design.settings.auto_focus_enabled = True
+    result = OptilandAdapter().analyze_first_order(window.design)
+    assert result.valid, result.error
+    assert window._apply_automatic_image_focus(result)
+    assert window.design.elements[-1].gap_after_mm == result.recommended_image_distance_mm
+    window._analysis_debounce.stop()
+
+    window.design.settings.auto_focus_enabled = True
+    window.f_number.setValue(5.6)
+    window._targets_changed()
+    assert window.design.settings.auto_focus_enabled is True
+    window.bfl_target.setValue(window.design.elements[-1].gap_after_mm + 1.0)
+    window._targets_changed()
+    assert window.design.settings.auto_focus_enabled is False
+    window._analysis_debounce.stop()
+
+    window.design.settings.auto_focus_enabled = True
+    window.design.elements[-1].gap_min_mm = window.design.elements[-1].gap_after_mm
+    window.design.elements[-1].gap_max_mm = window.design.elements[-1].gap_after_mm
+    bounded_result = OptilandAdapter().analyze_first_order(window.design)
+    assert bounded_result.valid, bounded_result.error
+    assert window._apply_automatic_image_focus(bounded_result) is False
     window.close()
     application.processEvents()
 

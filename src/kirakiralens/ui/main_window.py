@@ -136,7 +136,9 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.f_number)
         toolbar.addWidget(QLabel("BFL"))
         self.bfl_target = spin_box(0.1, 1000.0, 2)
-        self.bfl_target.setValue(self.design.settings.back_focus_target_mm)
+        self.bfl_target.setValue(
+            self.design.elements[-1].gap_after_mm if self.design.elements else self.design.settings.back_focus_target_mm
+        )
         self.bfl_target.setMaximumWidth(110)
         toolbar.addWidget(self.bfl_target)
         toolbar.addWidget(QLabel("最大径"))
@@ -245,6 +247,7 @@ class MainWindow(QMainWindow):
         self.inspector.surfaceSelectionRequested.connect(lambda element, surface: self._select("surface", element, surface))
         self.surface_table.designChanged.connect(self._design_changed)
         self.surface_table.surfaceSelected.connect(lambda element, surface: self._select("surface", element, surface))
+        self.surface_table.imageSelected.connect(self.open_system_settings)
         for widget in (self.focal_target, self.f_number, self.bfl_target, self.max_diameter):
             widget.editingFinished.connect(self._targets_changed)
 
@@ -274,7 +277,9 @@ class MainWindow(QMainWindow):
             control.blockSignals(True)
         self.focal_target.setValue(self.design.settings.focal_length_target_mm)
         self.f_number.setValue(self.design.settings.f_number_target)
-        self.bfl_target.setValue(self.design.settings.back_focus_target_mm)
+        self.bfl_target.setValue(
+            self.design.elements[-1].gap_after_mm if self.design.elements else self.design.settings.back_focus_target_mm
+        )
         self.max_diameter.setValue(self.design.settings.max_outer_diameter_mm)
         for control in controls:
             control.blockSignals(False)
@@ -283,10 +288,19 @@ class MainWindow(QMainWindow):
         self.design.settings.focal_length_target_mm = self.focal_target.value()
         self.design.settings.f_number_target = self.f_number.value()
         requested_bfl = self.bfl_target.value()
-        self.design.settings.back_focus_target_mm = requested_bfl
         self.design.settings.max_outer_diameter_mm = self.max_diameter.value()
         if self.design.elements:
-            self.design.elements[-1].gap_after_mm = requested_bfl
+            bfl_changed = abs(self.design.elements[-1].gap_after_mm - requested_bfl) > 1e-9
+            explicit_bfl_edit = self.sender() is self.bfl_target or (
+                self.sender() is None and abs(self.design.elements[-1].gap_after_mm - requested_bfl) >= 0.005
+            )
+            if explicit_bfl_edit:
+                self.design.settings.back_focus_target_mm = requested_bfl
+                self.design.elements[-1].gap_after_mm = requested_bfl
+                if bfl_changed:
+                    self.design.settings.auto_focus_enabled = False
+        else:
+            self.design.settings.back_focus_target_mm = requested_bfl
         self.catalog_panel.set_design_targets(
             self.focal_target.value(),
             self.f_number.value(),
@@ -416,6 +430,7 @@ class MainWindow(QMainWindow):
             element.gap_after_mm = min(element.gap_after_mm, element.gap_max_mm)
         if element_index == len(self.design.elements) - 1:
             self.design.settings.back_focus_target_mm = element.gap_after_mm
+            self.design.settings.auto_focus_enabled = False
         self.selected_element = element_index
         self.selected_kind = "gap"
         self._design_changed()
@@ -631,6 +646,8 @@ class MainWindow(QMainWindow):
     def _analysis_finished(self, generation: int, result: FirstOrderAnalysis) -> None:
         if generation != self._analysis_generation:
             return
+        if self._apply_automatic_image_focus(result):
+            return
         self.current_analysis = result
         self.inspector.set_analysis(result, self.design)
         self.lens_view.set_design(self.design, result)
@@ -641,6 +658,38 @@ class MainWindow(QMainWindow):
             )
         else:
             self.statusBar().showMessage(f"解析失敗: {result.error}", 10000)
+
+    def _apply_automatic_image_focus(self, result: FirstOrderAnalysis) -> bool:
+        if (
+            not result.valid
+            or not self.design.elements
+            or not self.design.settings.auto_focus_enabled
+            or self.design.elements[-1].gap_locked
+            or result.recommended_image_distance_mm is None
+        ):
+            return False
+        current = self.design.elements[-1].gap_after_mm
+        recommended = max(0.0, float(result.recommended_image_distance_mm))
+        last_element = self.design.elements[-1]
+        recommended = max(last_element.gap_min_mm, recommended)
+        if last_element.gap_max_mm is not None:
+            recommended = min(recommended, last_element.gap_max_mm)
+        if abs(current - recommended) < 1e-4:
+            return False
+        last_element.gap_after_mm = recommended
+        self._last_committed_design = deepcopy(self.design.to_dict())
+        self._design_signature = design_signature(self.design)
+        self._analysis_signature = analysis_signature(self.design)
+        self._analysis_generation += 1
+        self.current_analysis = FirstOrderAnalysis(valid=False, engine=result.engine, error="像面追従後の解析待ち")
+        self._refresh_all()
+        if self._performance_window is not None:
+            self._performance_window.set_design(self.design)
+        if self._system_settings_window is not None:
+            self._system_settings_window.set_design(self.design)
+        self.statusBar().showMessage(f"像面を最良焦点 {recommended:.3f} mmへ移動しました", 4000)
+        self._analysis_debounce.start()
+        return True
 
     def new_design(self) -> None:
         self._replace_design(OpticalDesign.starter())

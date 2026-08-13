@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from math import inf, isinf
+
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -558,6 +560,7 @@ class InspectorPanel(QWidget):
         if self._updating or self.design is None or self.element_index < 0:
             return
         element = self.design.elements[self.element_index]
+        gap_changed = abs(element.gap_after_mm - self.gap.value()) > 1e-9
         element.name = self.name_edit.text().strip() or element.name
         if not element.is_catalog:
             element.outer_diameter_mm = self.diameter.value()
@@ -565,6 +568,8 @@ class InspectorPanel(QWidget):
         element.element_locked = self.element_lock.isChecked()
         element.diameter_locked = self.diameter_lock.isChecked()
         element.gap_locked = self.gap_lock.isChecked()
+        if self.element_index == len(self.design.elements) - 1 and gap_changed:
+            self.design.settings.auto_focus_enabled = False
         self.designChanged.emit()
 
     def _apply_surface(self) -> None:
@@ -587,8 +592,78 @@ class InspectorPanel(QWidget):
 class SurfaceTable(QTableWidget):
     designChanged = Signal()
     surfaceSelected = Signal(int, int)
+    imageSelected = Signal()
 
-    HEADERS = ["要素", "面", "曲率半径", "次面まで", "面後の媒質", "有効径", "状態"]
+    HEADERS = [
+        "No.",
+        "種別",
+        "要素 / 型番",
+        "曲率半径",
+        "次面まで",
+        "面後の媒質",
+        "有効径",
+        "外径",
+        "面形状",
+        "K",
+        "非球面係数",
+        "コーティング",
+        "注記",
+        "絞り",
+        "R固定",
+        "間隔固定",
+        "材質固定",
+        "有効径固定",
+        "外径固定",
+        "非球面固定",
+        "像面 W x H",
+        "状態",
+    ]
+
+    (
+        COL_NUMBER,
+        COL_KIND,
+        COL_ELEMENT,
+        COL_RADIUS,
+        COL_DISTANCE,
+        COL_MATERIAL,
+        COL_APERTURE,
+        COL_DIAMETER,
+        COL_SURFACE_TYPE,
+        COL_CONIC,
+        COL_ASPHERE,
+        COL_COATING,
+        COL_COMMENT,
+        COL_STOP,
+        COL_RADIUS_LOCK,
+        COL_DISTANCE_LOCK,
+        COL_MATERIAL_LOCK,
+        COL_APERTURE_LOCK,
+        COL_DIAMETER_LOCK,
+        COL_ASPHERE_LOCK,
+        COL_SENSOR_SIZE,
+        COL_STATE,
+    ) = range(len(HEADERS))
+
+    CHECK_COLUMNS = {
+        COL_STOP,
+        COL_RADIUS_LOCK,
+        COL_DISTANCE_LOCK,
+        COL_MATERIAL_LOCK,
+        COL_APERTURE_LOCK,
+        COL_DIAMETER_LOCK,
+        COL_ASPHERE_LOCK,
+    }
+    PRESCRIPTION_COLUMNS = {
+        COL_RADIUS,
+        COL_MATERIAL,
+        COL_APERTURE,
+        COL_DIAMETER,
+        COL_SURFACE_TYPE,
+        COL_CONIC,
+        COL_ASPHERE,
+        COL_COATING,
+        COL_COMMENT,
+    }
 
     def __init__(self, parent=None):
         super().__init__(0, len(self.HEADERS), parent)
@@ -596,11 +671,12 @@ class SurfaceTable(QTableWidget):
         self.setAlternatingRowColors(True)
         self.verticalHeader().setVisible(False)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.horizontalHeader().setSectionResizeMode(self.COL_ELEMENT, QHeaderView.ResizeMode.Stretch)
         for column in range(1, len(self.HEADERS)):
-            self.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+            if column != self.COL_ELEMENT:
+                self.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         self.design: OpticalDesign | None = None
-        self._row_map: list[tuple[int, int]] = []
+        self._row_map: list[tuple[str, int, int]] = []
         self.itemChanged.connect(self._item_changed)
         self.itemSelectionChanged.connect(self._selection_changed)
 
@@ -608,55 +684,212 @@ class SurfaceTable(QTableWidget):
         self.design = design
         self.blockSignals(True)
         self._row_map.clear()
-        row_count = sum(len(element.surfaces) for element in design.elements)
+        row_count = sum(len(element.surfaces) for element in design.elements) + 2
         self.setRowCount(row_count)
-        row = 0
+        self._row_map.append(("object", -1, -1))
+        self._set_row(
+            0,
+            [
+                "0",
+                "物体面",
+                "OBJECT",
+                "Plane",
+                "Infinity" if isinf(design.settings.object_distance_mm) else f"{design.settings.object_distance_mm:.6g}",
+                "air",
+            ],
+            editable={self.COL_DISTANCE},
+        )
+        row = 1
+        global_surface = 1
         for element_index, element in enumerate(design.elements):
             for surface_index, surface in enumerate(element.surfaces):
-                self._row_map.append((element_index, surface_index))
+                self._row_map.append(("surface", element_index, surface_index))
                 is_last = surface_index == len(element.surfaces) - 1
+                stop_surface = design.stop_surface_index
+                if stop_surface is None or not 0 <= stop_surface < len(element.surfaces):
+                    stop_surface = len(element.surfaces) - 1
                 values = [
+                    str(global_surface),
+                    "レンズ面",
                     element.part_number or element.name,
-                    str(surface_index + 1),
                     "Plane" if surface.is_plane else f"{surface.radius_mm:.6g}",
                     f"{element.gap_after_mm if is_last else surface.thickness_after_mm:.6g}",
                     surface.material_after,
                     "" if surface.clear_aperture_mm is None else f"{surface.clear_aperture_mm:.6g}",
+                    f"{element.outer_diameter_mm:.6g}",
+                    surface.surface_type,
+                    f"{surface.conic:.6g}",
+                    ", ".join(f"{value:.8g}" for value in surface.asphere_coefficients),
+                    surface.coating,
+                    surface.comment,
+                    element_index == design.stop_after_element and surface_index == stop_surface,
+                    surface.radius_locked,
+                    element.gap_locked if is_last else surface.thickness_locked,
+                    surface.material_locked,
+                    surface.clear_aperture_locked,
+                    element.diameter_locked,
+                    surface.asphere_locked or surface.conic_locked,
+                    "",
                     "Catalog" if element.is_catalog else "Custom",
                 ]
-                for column, value in enumerate(values):
-                    item = QTableWidgetItem(value)
-                    editable = not element.is_catalog and column in (2, 3, 4, 5)
-                    if is_last and column == 3:
-                        editable = True
-                    if not editable:
-                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    if column in (1, 2, 3, 5):
-                        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                    self.setItem(row, column, item)
+                editable = set(self.PRESCRIPTION_COLUMNS) | set(self.CHECK_COLUMNS) | {self.COL_DISTANCE}
+                self._set_row(row, values, editable=editable)
                 row += 1
+                global_surface += 1
+        self._row_map.append(("image", -1, -1))
+        self._set_row(
+            row,
+            [
+                str(global_surface),
+                "像面",
+                "IMAGE",
+                "Plane",
+                "",
+                "",
+                "",
+                "",
+                "standard",
+                "0",
+                "",
+                "",
+                "",
+                False,
+                False,
+                bool(design.elements and design.elements[-1].gap_locked),
+                False,
+                False,
+                False,
+                False,
+                f"{design.settings.sensor_width_mm:.6g} x {design.settings.sensor_height_mm:.6g}",
+                "Auto focus" if design.settings.auto_focus_enabled else "Manual",
+            ],
+            editable={self.COL_SENSOR_SIZE, self.COL_DISTANCE_LOCK},
+        )
         self.blockSignals(False)
+
+    def _set_row(self, row: int, values: list, editable: set[int]) -> None:
+        values.extend([""] * (len(self.HEADERS) - len(values)))
+        for column, value in enumerate(values):
+            if column in self.CHECK_COLUMNS:
+                item = QTableWidgetItem("")
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Checked if bool(value) else Qt.CheckState.Unchecked)
+            else:
+                item = QTableWidgetItem(str(value))
+            if column not in editable:
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if column in self.CHECK_COLUMNS:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+            if column in {
+                self.COL_NUMBER,
+                self.COL_RADIUS,
+                self.COL_DISTANCE,
+                self.COL_APERTURE,
+                self.COL_DIAMETER,
+                self.COL_CONIC,
+            }:
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.setItem(row, column, item)
 
     def _item_changed(self, item: QTableWidgetItem) -> None:
         if self.design is None or item.row() >= len(self._row_map):
             return
-        element_index, surface_index = self._row_map[item.row()]
+        kind, element_index, surface_index = self._row_map[item.row()]
+        if kind == "object":
+            if item.column() != self.COL_DISTANCE:
+                return
+            text = item.text().strip().lower()
+            try:
+                self.design.settings.object_distance_mm = inf if text in {"inf", "infinity", "無限", "無限遠"} else max(0.1, float(text))
+            except ValueError:
+                self.set_design(self.design)
+                return
+            self.designChanged.emit()
+            return
+        if kind == "image":
+            if item.column() == self.COL_DISTANCE_LOCK and self.design.elements:
+                locked = item.checkState() == Qt.CheckState.Checked
+                self.design.elements[-1].gap_locked = locked
+                if locked:
+                    self.design.settings.auto_focus_enabled = False
+            elif item.column() == self.COL_SENSOR_SIZE:
+                try:
+                    width, height = self._parse_sensor_size(item.text())
+                except ValueError:
+                    self.set_design(self.design)
+                    return
+                self.design.settings.sensor_width_mm = width
+                self.design.settings.sensor_height_mm = height
+                self.design.settings.sensor_preset = "custom"
+            else:
+                return
+            self.designChanged.emit()
+            return
         element = self.design.elements[element_index]
-        surface = element.surfaces[surface_index]
         is_last = surface_index == len(element.surfaces) - 1
+        edits_catalog_prescription = item.column() in self.PRESCRIPTION_COLUMNS or (
+            item.column() == self.COL_DISTANCE and not is_last
+        )
+        if edits_catalog_prescription and element.is_catalog:
+            self.design.elements[element_index] = element.custom_copy()
+            element = self.design.elements[element_index]
+        surface = element.surfaces[surface_index]
         try:
-            if item.column() == 2 and not element.is_catalog:
+            if item.column() == self.COL_RADIUS:
                 surface.radius_mm = None if item.text().strip().lower() in {"plane", "flat", "inf"} else float(item.text())
-            elif item.column() == 3:
+            elif item.column() == self.COL_DISTANCE:
                 value = max(0.0, float(item.text()))
                 if is_last:
                     element.gap_after_mm = value
-                elif not element.is_catalog:
+                    if element_index == len(self.design.elements) - 1:
+                        self.design.settings.back_focus_target_mm = value
+                        self.design.settings.auto_focus_enabled = False
+                else:
                     surface.thickness_after_mm = value
-            elif item.column() == 4 and not element.is_catalog:
+            elif item.column() == self.COL_MATERIAL:
                 surface.material_after = item.text().strip() or "air"
-            elif item.column() == 5 and not element.is_catalog:
+            elif item.column() == self.COL_APERTURE:
                 surface.clear_aperture_mm = max(0.0, float(item.text()))
+            elif item.column() == self.COL_DIAMETER:
+                element.outer_diameter_mm = max(0.1, float(item.text()))
+            elif item.column() == self.COL_SURFACE_TYPE:
+                value = item.text().strip().lower()
+                if value not in {"standard", "even_asphere"}:
+                    raise ValueError("unsupported surface type")
+                surface.surface_type = value
+            elif item.column() == self.COL_CONIC:
+                surface.conic = float(item.text())
+            elif item.column() == self.COL_ASPHERE:
+                surface.asphere_coefficients = self._parse_coefficients(item.text())
+                if surface.asphere_coefficients:
+                    surface.surface_type = "even_asphere"
+            elif item.column() == self.COL_COATING:
+                surface.coating = item.text().strip()
+            elif item.column() == self.COL_COMMENT:
+                surface.comment = item.text().strip()
+            elif item.column() == self.COL_STOP:
+                if item.checkState() == Qt.CheckState.Checked:
+                    self.design.stop_after_element = element_index
+                    self.design.stop_surface_index = surface_index
+            elif item.column() == self.COL_RADIUS_LOCK:
+                surface.radius_locked = item.checkState() == Qt.CheckState.Checked
+            elif item.column() == self.COL_DISTANCE_LOCK:
+                if is_last:
+                    element.gap_locked = item.checkState() == Qt.CheckState.Checked
+                    if element_index == len(self.design.elements) - 1 and element.gap_locked:
+                        self.design.settings.auto_focus_enabled = False
+                else:
+                    surface.thickness_locked = item.checkState() == Qt.CheckState.Checked
+            elif item.column() == self.COL_MATERIAL_LOCK:
+                surface.material_locked = item.checkState() == Qt.CheckState.Checked
+            elif item.column() == self.COL_APERTURE_LOCK:
+                surface.clear_aperture_locked = item.checkState() == Qt.CheckState.Checked
+            elif item.column() == self.COL_DIAMETER_LOCK:
+                element.diameter_locked = item.checkState() == Qt.CheckState.Checked
+            elif item.column() == self.COL_ASPHERE_LOCK:
+                locked = item.checkState() == Qt.CheckState.Checked
+                surface.conic_locked = locked
+                surface.asphere_locked = locked
             else:
                 return
         except ValueError:
@@ -664,7 +897,29 @@ class SurfaceTable(QTableWidget):
             return
         self.designChanged.emit()
 
+    @staticmethod
+    def _parse_coefficients(text: str) -> list[float]:
+        clean = text.strip()
+        if not clean:
+            return []
+        return [float(value.strip()) for value in clean.replace(";", ",").split(",") if value.strip()]
+
+    @staticmethod
+    def _parse_sensor_size(text: str) -> tuple[float, float]:
+        clean = text.lower().replace("×", "x").replace(",", "x")
+        parts = [part.strip() for part in clean.split("x") if part.strip()]
+        if len(parts) != 2:
+            raise ValueError("sensor size must be W x H")
+        width, height = map(float, parts)
+        if width <= 0 or height <= 0:
+            raise ValueError("sensor size must be positive")
+        return width, height
+
     def _selection_changed(self) -> None:
         row = self.currentRow()
         if 0 <= row < len(self._row_map):
-            self.surfaceSelected.emit(*self._row_map[row])
+            kind, element_index, surface_index = self._row_map[row]
+            if kind == "surface":
+                self.surfaceSelected.emit(element_index, surface_index)
+            else:
+                self.imageSelected.emit()

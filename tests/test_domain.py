@@ -29,3 +29,12 @@ def test_design_dictionary_uses_strict_json_value_for_infinity() -> None:
     assert data["settings"]["object_distance_mm"] == "infinity"
     restored = OpticalDesign.from_dict(data)
     assert restored.settings.object_distance_mm == float("inf")
+
+
+def test_older_designs_default_to_automatic_image_focus() -> None:
+    data = OpticalDesign.starter().to_dict()
+    del data["settings"]["auto_focus_enabled"]
+
+    restored = OpticalDesign.from_dict(data)
+
+    assert restored.settings.auto_focus_enabled is True

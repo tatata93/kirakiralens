@@ -13,12 +13,16 @@ The current milestone includes:
 - catalog filtering and insertion into the current design;
 - versioned `.kklens` project save/load;
 - cached, non-blocking Optiland first-order analysis;
+- automatic paraxial image-plane focus after prescription changes, with a
+  manual/locked image-plane mode;
 - directly editable image plane with sensor presets, field angles, ray sampling,
   Fraunhofer wavelength presets, and wavelength/field weights;
 - a manual performance window for polychromatic MTF, spot, transverse and
   longitudinal aberration, field curvature, and distortion;
-- cancellable continuous automatic design for unlocked custom radii,
-  thicknesses, air gaps, and image-plane position.
+- cancellable mixed discrete/continuous automatic design with numeric EFL,
+  F-number, and target/minimum/range BFL goals;
+- a complete editable surface table covering every lens surface, object, image
+  size, apertures, aspheres, stop assignment, and optimization locks.
 
 ![KiraKiraLens main window](docs/images/main-window.png)
 

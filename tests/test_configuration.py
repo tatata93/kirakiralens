@@ -35,4 +35,22 @@ def test_automatic_design_preserves_catalog_and_locked_variables() -> None:
     assert not any(label.startswith("L1 S") and "曲率半径" in label for label in labels)
     assert "L2 S1 曲率半径" not in labels
     assert "L2 後方空気間隔" not in labels
-    assert "像面位置" not in labels
+    assert "像面位置" in labels
+
+    fixed_image_labels = {candidate.label for candidate in variable_candidates(design, {"vary_image_plane": False})}
+    assert "像面位置" not in fixed_image_labels
+
+
+def test_numeric_minimum_bfl_expands_the_automatic_image_bound() -> None:
+    design = OpticalDesign.starter()
+    candidates = variable_candidates(
+        design,
+        {
+            "bfl_constraint": "minimum",
+            "minimum_bfl_mm": 250.0,
+            "bfl_tolerance_mm": 0.5,
+        },
+    )
+    image_candidate = next(candidate for candidate in candidates if candidate.kind == "image_gap")
+
+    assert image_candidate.maximum >= 250.5

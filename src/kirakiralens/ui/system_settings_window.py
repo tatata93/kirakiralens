@@ -145,6 +145,7 @@ class SystemSettingsWindow(QDialog):
         self.image_distance.setSingleStep(0.1)
         self.image_distance.setAccelerated(True)
         self.image_distance_lock = QCheckBox("像面位置を固定")
+        self.auto_focus = QCheckBox("レンズ変更時に像面を最良焦点へ追従")
         self.bfl_tolerance = self._double_spin(0.0, 100.0, 3, " mm")
         self.bfl_hard = QCheckBox("バックフォーカスを必須制約にする")
         self.cover_glass = self._double_spin(0.0, 20.0, 3, " mm")
@@ -157,6 +158,7 @@ class SystemSettingsWindow(QDialog):
         form.addRow("高さ", self.sensor_height)
         form.addRow("最終面から像面", self.image_distance)
         form.addRow(self.image_distance_lock)
+        form.addRow(self.auto_focus)
         form.addRow("BFL許容差", self.bfl_tolerance)
         form.addRow(self.bfl_hard)
         form.addRow("カバーガラス", self.cover_glass)
@@ -239,6 +241,7 @@ class SystemSettingsWindow(QDialog):
         self.sensor_height.setValue(settings.sensor_height_mm)
         self.image_distance.setValue(design.elements[-1].gap_after_mm if design.elements else settings.back_focus_target_mm)
         self.image_distance_lock.setChecked(bool(design.elements and design.elements[-1].gap_locked))
+        self.auto_focus.setChecked(settings.auto_focus_enabled)
         self.bfl_tolerance.setValue(settings.back_focus_tolerance_mm)
         self.bfl_hard.setChecked(settings.back_focus_hard)
         self.cover_glass.setValue(settings.cover_glass_thickness_mm)
@@ -346,12 +349,21 @@ class SystemSettingsWindow(QDialog):
 
     def apply(self) -> None:
         settings = self.design.settings
+        image_distance_changed = bool(
+            self.design.elements
+            and abs(self.design.elements[-1].gap_after_mm - self.image_distance.value()) > 1e-9
+        )
         settings.sensor_width_mm = self.sensor_width.value()
         settings.sensor_height_mm = self.sensor_height.value()
         settings.sensor_preset = sensor_preset_for_size(settings.sensor_width_mm, settings.sensor_height_mm)
         settings.back_focus_target_mm = self.image_distance.value()
         settings.back_focus_tolerance_mm = self.bfl_tolerance.value()
         settings.back_focus_hard = self.bfl_hard.isChecked()
+        settings.auto_focus_enabled = (
+            self.auto_focus.isChecked()
+            and not self.image_distance_lock.isChecked()
+            and not image_distance_changed
+        )
         settings.cover_glass_thickness_mm = self.cover_glass.value()
         settings.object_distance_mm = inf if self.infinite_object.isChecked() else self.object_distance.value()
         if self.design.elements:

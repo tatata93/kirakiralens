@@ -118,6 +118,7 @@ class DesignSettings:
     back_focus_target_mm: float = 45.46
     back_focus_tolerance_mm: float = 0.5
     back_focus_hard: bool = False
+    auto_focus_enabled: bool = True
     cover_glass_thickness_mm: float = 0.0
     primary_wavelength_um: float = 0.58756
     wavelengths_um: list[float] = field(default_factory=lambda: [0.48613, 0.58756, 0.65627])

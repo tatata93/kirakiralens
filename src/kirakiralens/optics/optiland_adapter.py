@@ -21,6 +21,8 @@ class FirstOrderAnalysis:
     engine: str
     effective_focal_length_mm: float | None = None
     back_focal_length_mm: float | None = None
+    image_distance_mm: float | None = None
+    recommended_image_distance_mm: float | None = None
     image_f_number: float | None = None
     entrance_pupil_diameter_mm: float | None = None
     total_track_mm: float | None = None
@@ -98,6 +100,7 @@ class OptilandAdapter:
             system = self.to_optic(design)
             final_gap = design.elements[-1].gap_after_mm
             indices = [float(value) for value in system.n()]
+            recommended_image_distance = max(0.0, float(final_gap + system.paraxial.F2()))
             effective_focal_length = float(system.paraxial.f2())
             angles = sensor_angle_of_view(design.settings, effective_focal_length)
             traced_fields = resolved_field_angles(design.settings)
@@ -105,7 +108,9 @@ class OptilandAdapter:
                 valid=True,
                 engine=f"Optiland {getattr(optiland, '__version__', 'unknown')}",
                 effective_focal_length_mm=effective_focal_length,
-                back_focal_length_mm=float(final_gap + system.paraxial.F2()),
+                back_focal_length_mm=float(final_gap),
+                image_distance_mm=float(final_gap),
+                recommended_image_distance_mm=recommended_image_distance,
                 image_f_number=float(system.paraxial.FNO()),
                 entrance_pupil_diameter_mm=float(system.paraxial.EPD()),
                 total_track_mm=float(system.total_track),

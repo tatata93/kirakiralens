@@ -23,6 +23,9 @@ Verified working:
 - Horizontal, vertical, and diagonal angle of view appear in first-order and
   performance results; every performance field carries its actual half-angle.
 - Initial custom triplet whose Optiland result is EFL 50.000 mm and BFL 45.460 mm.
+- After a prescription change, the unlocked image plane automatically follows
+  Optiland's paraxial focus. Manual BFL entry or an image-distance lock switches
+  the design to manual image positioning.
 - A persistent editor directly above the diagram exposes surface type, radius,
   conic constant, even-asphere coefficients, thickness/gap, material, clear and
   outer diameter, coating, comment, variable locks, and stop assignment.
@@ -30,7 +33,9 @@ Verified working:
   customizing elements and surfaces. A dedicated insertion target exists before
   L1, and every air gap/BFL has an in-diagram numeric spin box as well as drag.
 - Non-blocking context menus for surfaces, elements, and gaps. The synchronized
-  surface table remains available as an optional hidden-by-default dock.
+  surface table remains available as an optional hidden-by-default dock and
+  edits every object, lens, and image row, including both sides of every lens,
+  materials, apertures, aspheres, comments, stop assignment, and locks.
 - Undo and redo cover prescription, insertion/deletion, spacing, image-plane,
   and ray-setting edits.
 - Correct reversal of singlets and cemented doublets, including radius signs,
@@ -47,10 +52,12 @@ Verified working:
   Optiland real-ray tracing.
 - Catalog filters for manufacturer, text, shape, material, coating, diameter,
   clear aperture, EFL, power sign, wavelength, and photographic relevance.
-- A dedicated automatic-design window runs cancellable, budgeted Optiland
-  real-ray continuous optimization of unlocked custom radii/thicknesses, air
-  gaps, and optionally the image plane. It exposes normalized EFL, BFL, spot,
-  and distortion weights and applies a best result only on request.
+- A dedicated automatic-design window runs cancellable, budgeted mixed
+  optimization. It accepts numeric EFL/tolerance, image F-number, and
+  target/minimum/range BFL conditions; EFL and BFL can be required constraints.
+  Its discrete stage searches catalog replacements, orientation, and order with
+  a bounded beam, then passes the best prescription to Optiland/SciPy continuous
+  optimization of unlocked custom radii/thicknesses, air gaps, and image plane.
 
 ## Edmund catalog result
 
@@ -78,6 +85,7 @@ workbook. They are deliberately not designable. See
 - `src/kirakiralens/optics/performance.py`: numerical performance analyses and merit metrics.
 - `src/kirakiralens/optics/performance_process.py`: isolated performance worker.
 - `src/kirakiralens/optics/automatic_design.py`: locks, variables, normalized merit, and optimization.
+- `src/kirakiralens/optics/discrete_search.py`: catalog substitution, orientation, and order beam search.
 - `src/kirakiralens/optics/automatic_design_process.py`: isolated optimization worker.
 - `src/kirakiralens/optics/paraxial.py`: ray paths using indices returned by Optiland.
 - `src/kirakiralens/ui/analysis_controller.py`: debouncing and process lifecycle.
@@ -98,20 +106,20 @@ Run:
 .\.venv\Scripts\python.exe -m kirakiralens
 ```
 
-The current suite has sixteen passing tests. A Windows-rendered 1500 x 900 capture
+The current suite has twenty-two passing tests. A Windows-rendered 1500 x 900 capture
 is stored at `docs/images/main-window.png` and has been checked for text clipping
 and incoherent overlap.
 
 ## Known limitations and next phase
 
-The next work should finish Phase 3 and begin Phase 4's discrete catalog search.
+The next work should finish Phase 3 and expand Phase 4's discrete catalog search.
 
 Not yet implemented:
 
-- Per-metric hard limits/goals, stop-position optimization, checkpoints, pause,
-  and multi-candidate/Pareto comparison.
+- Hard limits for image-quality metrics beyond EFL/BFL, stop-position
+  optimization, checkpoints, pause, and multi-candidate/Pareto comparison.
 - Triplet, Tessar, and Double Gauss catalog searches.
-- Free-topology discrete-continuous search.
+- Element-count-changing free-topology discrete-continuous search.
 - PSF, relative-illumination, through-focus, and tolerance analysis views.
 - `.seq`, `.len`, and `.zmx` exchange.
 - Vendor web collectors, price history, and stock tracking.
