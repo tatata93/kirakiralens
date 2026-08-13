@@ -11,7 +11,8 @@ import numpy as np
 from ..domain import OpticalDesign
 from .configuration import resolved_field_weights
 from .longitudinal import longitudinal_aberration_metrics
-from .optiland_adapter import OptilandAdapter
+from .mechanics import ensure_air_gap_clearances, mechanical_clearance_violations, required_air_gap_mm
+from .optiland_adapter import OptilandAdapter, scalar_value
 
 
 @dataclass(slots=True)
@@ -47,6 +48,8 @@ DEFAULT_AUTOMATIC_OPTIONS: dict[str, Any] = {
     "efl_tolerance_mm": 0.5,
     "efl_hard": False,
     "target_f_number": None,
+    "aperture_mode": None,
+    "target_aperture_value": None,
     "bfl_constraint": "target",
     "target_bfl_mm": None,
     "minimum_bfl_mm": 0.0,
@@ -74,6 +77,7 @@ DEFAULT_AUTOMATIC_OPTIONS: dict[str, Any] = {
     "topology_pool": [],
     "classic_form": "",
     "classic_seed_design": None,
+    "minimum_edge_clearance_mm": 0.1,
 }
 
 
@@ -87,6 +91,18 @@ def normalized_automatic_options(options: dict[str, Any] | None = None) -> dict[
     result["seed"] = int(result["seed"])
     result["target_efl_mm"] = None if result["target_efl_mm"] is None else max(float(result["target_efl_mm"]), 0.1)
     result["target_f_number"] = None if result["target_f_number"] is None else min(max(float(result["target_f_number"]), 0.5), 64.0)
+    if result["aperture_mode"] not in {
+        None,
+        "image_f_number",
+        "entrance_pupil_diameter",
+        "stop_semi_diameter",
+    }:
+        result["aperture_mode"] = "image_f_number"
+    result["target_aperture_value"] = (
+        None
+        if result["target_aperture_value"] is None
+        else max(float(result["target_aperture_value"]), 0.005)
+    )
     result["target_bfl_mm"] = None if result["target_bfl_mm"] is None else max(float(result["target_bfl_mm"]), 0.0)
     result["minimum_bfl_mm"] = max(float(result["minimum_bfl_mm"]), 0.0)
     result["maximum_bfl_mm"] = max(float(result["maximum_bfl_mm"]), result["minimum_bfl_mm"])
@@ -98,6 +114,10 @@ def normalized_automatic_options(options: dict[str, Any] | None = None) -> dict[
         else max(float(result["maximum_total_track_mm"]), 0.1)
     )
     result["track_tolerance_mm"] = max(float(result["track_tolerance_mm"]), 1e-3)
+    result["minimum_edge_clearance_mm"] = min(
+        max(float(result["minimum_edge_clearance_mm"]), 0.0),
+        10.0,
+    )
     result["longitudinal_tolerance_um"] = min(
         max(float(result["longitudinal_tolerance_um"]), 0.1),
         100000.0,
@@ -199,6 +219,15 @@ def variable_candidates(design: OpticalDesign, options: dict[str, Any] | None = 
                 enabled = resolved["vary_image_plane"] if is_image_plane else resolved["vary_air_gaps"]
                 if enabled:
                     minimum = max(element.gap_min_mm, 0.0)
+                    if not is_image_plane and element_index + 1 < len(design.elements):
+                        minimum = max(
+                            minimum,
+                            required_air_gap_mm(
+                                element,
+                                design.elements[element_index + 1],
+                                resolved["minimum_edge_clearance_mm"],
+                            ),
+                        )
                     maximum = (
                         element.gap_max_mm
                         if element.gap_max_mm is not None
@@ -265,15 +294,33 @@ def run_automatic_design(
     if not design.elements:
         return {"valid": False, "error": "探索するレンズがありません", "options": _public_options(resolved)}
     target_efl = resolved["target_efl_mm"] or design.settings.focal_length_target_mm
-    target_f_number = resolved["target_f_number"] or design.settings.f_number_target
+    aperture_mode = resolved["aperture_mode"] or design.settings.aperture_mode
+    target_aperture_value = resolved["target_aperture_value"]
+    if target_aperture_value is None:
+        if aperture_mode == "entrance_pupil_diameter":
+            target_aperture_value = design.settings.entrance_pupil_diameter_mm
+        elif aperture_mode == "stop_semi_diameter":
+            target_aperture_value = design.settings.stop_semi_diameter_mm
+        else:
+            target_aperture_value = resolved["target_f_number"] or design.settings.f_number_target
+    if aperture_mode == "entrance_pupil_diameter":
+        target_f_number = target_efl / max(target_aperture_value, 0.01)
+    elif aperture_mode == "stop_semi_diameter":
+        target_f_number = target_efl / max(2.0 * target_aperture_value, 0.01)
+    else:
+        target_f_number = resolved["target_f_number"] or target_aperture_value
     target_bfl = resolved["target_bfl_mm"]
     if target_bfl is None:
         target_bfl = design.settings.back_focus_target_mm
     resolved["target_efl_mm"] = target_efl
     resolved["target_f_number"] = target_f_number
+    resolved["aperture_mode"] = aperture_mode
+    resolved["target_aperture_value"] = target_aperture_value
     resolved["target_bfl_mm"] = target_bfl
     design.settings.focal_length_target_mm = target_efl
-    design.settings.f_number_target = target_f_number
+    _apply_aperture_target(design, resolved)
+    if resolved["vary_air_gaps"]:
+        ensure_air_gap_clearances(design, resolved["minimum_edge_clearance_mm"])
     source_image_distance = design.elements[-1].gap_after_mm if design.elements else None
     if resolved["classic_form"]:
         seed_data = resolved.get("classic_seed_design")
@@ -281,7 +328,9 @@ def run_automatic_design(
             return {"valid": False, "error": "古典型の初期構成がありません", "options": _public_options(resolved)}
         design = OpticalDesign.from_dict(seed_data)
         design.settings.focal_length_target_mm = target_efl
-        design.settings.f_number_target = target_f_number
+        _apply_aperture_target(design, resolved)
+        if resolved["vary_air_gaps"]:
+            ensure_air_gap_clearances(design, resolved["minimum_edge_clearance_mm"])
     discrete_result: dict[str, Any] | None = None
     if resolved["discrete_search"]:
         from .discrete_search import run_discrete_search
@@ -349,7 +398,7 @@ def run_automatic_design(
     field_weights = _normalized_positive(resolved_field_weights(design.settings), len(fields))
     wavelengths = [float(value) for value in system.wavelengths.get_wavelengths()]
     wavelength_weights = _normalized_positive(design.settings.wavelength_weights, len(wavelengths))
-    airy_radius_mm = max(1.22 * design.settings.primary_wavelength_um * 1e-3 * design.settings.f_number_target, 1e-5)
+    airy_radius_mm = max(1.22 * design.settings.primary_wavelength_um * 1e-3 * target_f_number, 1e-5)
     spot_operand_indices: list[int] = []
     if resolved["spot_weight"] > 0:
         for field_index, field in enumerate(fields):
@@ -412,6 +461,19 @@ def run_automatic_design(
             for variable, value in zip(problem.variables, values, strict=True):
                 variable.update(float(value))
             problem.update_optics()
+            overrides = {
+                (candidate.kind, candidate.element_index, candidate.surface_index): float(
+                    variable.variable.get_value()
+                )
+                for candidate, variable in zip(candidates, problem.variables, strict=True)
+                if candidate.kind in {"radius", "thickness", "air_gap"}
+            }
+            if mechanical_clearance_violations(
+                design,
+                resolved["minimum_edge_clearance_mm"],
+                overrides,
+            ):
+                raise ValueError("mechanical clearance violated")
             score = float(problem.sum_squared())
             image_distance = _current_image_distance(design, candidates, problem)
             score += _back_focus_penalty(image_distance, resolved)
@@ -507,6 +569,7 @@ def run_automatic_design(
         and (not resolved["bfl_hard"] or _back_focus_satisfied(design.elements[-1].gap_after_mm, resolved))
         and (not resolved["track_hard"] or _track_satisfied(_current_total_track(system), resolved))
         and (not resolved["longitudinal_hard"] or _longitudinal_satisfied(metrics, resolved))
+        and not mechanical_clearance_violations(design, resolved["minimum_edge_clearance_mm"])
     )
     ranked_candidates = _optimized_candidate_list(
         discrete_result,
@@ -550,6 +613,8 @@ def _target_summary(options: dict[str, Any]) -> dict[str, Any]:
     return {
         "effective_focal_length_mm": options["target_efl_mm"],
         "f_number": options["target_f_number"],
+        "aperture_mode": options["aperture_mode"],
+        "aperture_value": options["target_aperture_value"],
         "bfl_constraint": options["bfl_constraint"],
         "target_bfl_mm": options["target_bfl_mm"],
         "minimum_bfl_mm": options["minimum_bfl_mm"],
@@ -753,7 +818,7 @@ def _final_metrics(system, problem, spot_operand_indices, design) -> dict[str, f
     )
     return {
         "effective_focal_length_mm": float(system.paraxial.f2()),
-        "image_f_number": float(system.paraxial.FNO()),
+        "image_f_number": scalar_value(system.paraxial.FNO()),
         "image_distance_mm": design.elements[-1].gap_after_mm,
         "maximum_rms_spot_um": max(spot_values, default=None),
         "mtf40_min": mtf40_min,
@@ -766,5 +831,18 @@ def _final_metrics(system, problem, spot_operand_indices, design) -> dict[str, f
         "maximum_outer_diameter_mm": max((element.outer_diameter_mm for element in design.elements), default=None),
         "diffraction_airy_radius_um": 1.22
         * design.settings.primary_wavelength_um
-        * design.settings.f_number_target,
+        * scalar_value(system.paraxial.FNO()),
     }
+
+
+def _apply_aperture_target(design: OpticalDesign, options: dict[str, Any]) -> None:
+    settings = design.settings
+    settings.aperture_mode = options["aperture_mode"]
+    value = float(options["target_aperture_value"])
+    if settings.aperture_mode == "entrance_pupil_diameter":
+        settings.entrance_pupil_diameter_mm = value
+    elif settings.aperture_mode == "stop_semi_diameter":
+        settings.stop_semi_diameter_mm = value
+    else:
+        settings.f_number_target = float(options["target_f_number"])
+    settings.normalize()

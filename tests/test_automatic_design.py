@@ -15,6 +15,11 @@ from kirakiralens.optics.discrete_search import (
     _split_element_with_catalog,
 )
 from kirakiralens.optics.longitudinal import longitudinal_aberration_metrics
+from kirakiralens.optics.mechanics import (
+    ensure_air_gap_clearances,
+    mechanical_clearance_violations,
+    required_air_gap_mm,
+)
 from kirakiralens.optics.optiland_adapter import OptilandAdapter
 from kirakiralens.optics.reference_designs import build_reference_design
 
@@ -131,6 +136,36 @@ def test_topology_options_are_normalized() -> None:
     assert options["maximum_element_count"] == 5
     assert options["allow_catalog_splitting"] is True
     assert options["maximum_split_count"] == 6
+    assert options["minimum_edge_clearance_mm"] == 0.1
+
+
+def test_curved_neighboring_lenses_are_separated_at_their_edges() -> None:
+    design = OpticalDesign.starter()
+    left = deepcopy(design.elements[1])
+    right = deepcopy(design.elements[1])
+    left.outer_diameter_mm = 20.0
+    right.outer_diameter_mm = 20.0
+    left.surfaces[0].radius_mm = None
+    left.surfaces[0].clear_aperture_mm = 20.0
+    left.surfaces[0].thickness_after_mm = 3.0
+    left.surfaces[1].radius_mm = 20.0
+    left.surfaces[1].clear_aperture_mm = 20.0
+    right.surfaces[0].radius_mm = -20.0
+    right.surfaces[0].clear_aperture_mm = 20.0
+    right.surfaces[0].thickness_after_mm = 3.0
+    right.surfaces[1].radius_mm = None
+    right.surfaces[1].clear_aperture_mm = 20.0
+    left.gap_after_mm = 0.1
+    right.gap_after_mm = 20.0
+    design.elements = [left, right]
+
+    required = required_air_gap_mm(left, right, 0.1)
+
+    assert required > 5.0
+    assert mechanical_clearance_violations(design, 0.1) == ["L1-L2 collision"]
+    assert ensure_air_gap_clearances(design, 0.1)
+    assert abs(design.elements[0].gap_after_mm - required) < 1e-9
+    assert mechanical_clearance_violations(design, 0.1) == []
 
 
 def test_catalog_split_preserves_final_gap_and_moves_stop_with_group() -> None:

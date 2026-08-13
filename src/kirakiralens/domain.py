@@ -124,6 +124,9 @@ class DesignSettings:
     object_distance_mm: float = inf
     focal_length_target_mm: float = 50.0
     f_number_target: float = 4.0
+    aperture_mode: str = "image_f_number"
+    entrance_pupil_diameter_mm: float = 12.5
+    stop_semi_diameter_mm: float = 6.25
     mount_name: str = "Pentax K"
     back_focus_target_mm: float = 45.46
     back_focus_tolerance_mm: float = 0.5
@@ -146,6 +149,21 @@ class DesignSettings:
     def normalize(self) -> None:
         self.sensor_width_mm = max(float(self.sensor_width_mm), 0.1)
         self.sensor_height_mm = max(float(self.sensor_height_mm), 0.1)
+        if self.aperture_mode not in {
+            "image_f_number",
+            "entrance_pupil_diameter",
+            "stop_semi_diameter",
+        }:
+            self.aperture_mode = "image_f_number"
+        self.f_number_target = min(max(float(self.f_number_target), 0.5), 64.0)
+        self.entrance_pupil_diameter_mm = min(
+            max(float(self.entrance_pupil_diameter_mm), 0.01),
+            10_000.0,
+        )
+        self.stop_semi_diameter_mm = min(
+            max(float(self.stop_semi_diameter_mm), 0.005),
+            5_000.0,
+        )
         if self.field_mode not in {"sensor", "angles"}:
             self.field_mode = "sensor"
         active_fields = self.field_angles_deg if self.field_mode == "angles" else self.field_fractions
@@ -182,6 +200,30 @@ class DesignSettings:
         self.spot_ring_count = min(max(int(self.spot_ring_count), 2), 30)
         self.ray_fan_point_count = _odd_between(self.ray_fan_point_count, 11, 501)
         self.analysis_curve_point_count = min(max(int(self.analysis_curve_point_count), 11), 201)
+
+    @property
+    def aperture_value(self) -> float:
+        if self.aperture_mode == "entrance_pupil_diameter":
+            return self.entrance_pupil_diameter_mm
+        if self.aperture_mode == "stop_semi_diameter":
+            return self.stop_semi_diameter_mm
+        return self.f_number_target
+
+    def set_aperture_value(self, value: float) -> None:
+        if self.aperture_mode == "entrance_pupil_diameter":
+            self.entrance_pupil_diameter_mm = value
+        elif self.aperture_mode == "stop_semi_diameter":
+            self.stop_semi_diameter_mm = value
+        else:
+            self.f_number_target = value
+        self.normalize()
+
+    def estimated_f_number(self) -> float:
+        if self.aperture_mode == "entrance_pupil_diameter":
+            return self.focal_length_target_mm / max(self.entrance_pupil_diameter_mm, 0.01)
+        if self.aperture_mode == "stop_semi_diameter":
+            return self.focal_length_target_mm / max(2.0 * self.stop_semi_diameter_mm, 0.01)
+        return self.f_number_target
 
 
 @dataclass(slots=True)

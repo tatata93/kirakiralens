@@ -54,10 +54,13 @@ Verified working:
   prescriptions reuse cached results instead of recalculating.
 - Element diameter and per-surface clear aperture are hard radial apertures in
   Optiland real-ray tracing.
+- Aperture definition is selectable between image-space F-number, entrance-
+  pupil diameter, and physical stop semi-diameter. The choice is available in
+  the main toolbar and image/ray settings and is preserved in project files.
 - Catalog filters for manufacturer, text, shape, material, coating, diameter,
   clear aperture, EFL, power sign, wavelength, and photographic relevance.
 - A dedicated automatic-design window runs cancellable, budgeted mixed
-  optimization. It accepts numeric EFL/tolerance, image F-number, and
+  optimization. It accepts numeric EFL/tolerance, selectable aperture mode, and
   target/minimum/range BFL conditions plus an optional maximum total track;
   EFL, BFL, and total track can be required constraints.
   Its discrete stage searches catalog replacements, orientation, and order with
@@ -67,6 +70,10 @@ Verified working:
   user-entered component-count limits and moves the aperture stop among modeled
   surfaces. Locked components remain fixed. Each retained candidate reports its
   component count and stop surface.
+- Automatic candidates must satisfy a configurable minimum curved-surface
+  clearance. Neighboring surface sag is checked across the shared physical
+  diameter; unlocked gaps are expanded after discrete mutations and colliding
+  candidates are rejected during both discrete and continuous scoring.
 - Automatic-design settings are separated into design targets, change scope,
   and image-quality targets. Image-quality presets and editable relative weights
   include a real-ray longitudinal-aberration RMS target. The target can be a

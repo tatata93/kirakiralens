@@ -7,7 +7,7 @@ pipeline. It runs in a separate process, has time and evaluation budgets,
 reports progress, can be cancelled, preserves the best valid point found, and
 does not modify the design until the user applies that result.
 
-The user enters an effective focal length and tolerance, image F-number, a BFL
+The user enters an effective focal length and tolerance, an aperture definition, a BFL
 condition, and an optional maximum total track. BFL can be unconstrained, a
 target with tolerance, a minimum, or a range. Effective focal length, BFL, and
 total track may be marked required; a result outside a required condition is
@@ -38,9 +38,11 @@ The automatic-design window separates settings into `設計目標`, `変更範�
 presets set the relative weights, while every numeric value remains editable.
 Changing a preset value marks the setup as custom.
 
-F-number is passed to Optiland as the image-space F-number aperture definition.
-It therefore defines the ray bundle for every merit evaluation rather than
-being treated as another soft merit term.
+The aperture can be defined by image-space F-number, entrance-pupil diameter,
+or the physical semi-diameter of the selected stop surface. These map to
+Optiland's `imageFNO`, `EPD`, and `float_by_stop_size` definitions. The selected
+definition controls the ray bundle for every merit evaluation rather than being
+treated as another soft merit term.
 
 This is not a universal photographic-lens pass/fail score. A useful design must
 still be inspected in the performance window for tangential/sagittal MTF at
@@ -67,6 +69,13 @@ Catalog radii, glass, cemented structure, internal thickness, diameter, and
 clear aperture remain immutable. Surface, element, gap, and image-plane locks
 are hard exclusions. Bounds are conservative and positive gaps/thicknesses are
 maintained.
+
+Automatic design also enforces a user-entered minimum physical clearance
+between neighboring components. It samples the actual front/rear surface sag
+over their shared physical diameter, increases unlocked gaps when a discrete
+replacement needs more room, and rejects continuous or discrete candidates
+whose curved surfaces intersect. A positive vertex gap alone is not considered
+sufficient.
 
 Local search uses SciPy Powell and global search uses differential evolution;
 both evaluate Optiland's optical model. Local search is the normal first choice.

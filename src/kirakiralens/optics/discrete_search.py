@@ -12,8 +12,9 @@ import numpy as np
 from ..domain import LensElement, OpticalDesign, lens_element_from_dict, new_id
 from .configuration import resolved_field_weights
 from .longitudinal import longitudinal_aberration_metrics
+from .mechanics import ensure_air_gap_clearances, mechanical_clearance_violations
 from .classic_forms import design_matches_form, form_summary
-from .optiland_adapter import OptilandAdapter
+from .optiland_adapter import OptilandAdapter, scalar_value
 from .signature import analysis_signature
 
 
@@ -249,6 +250,7 @@ def _mutate(
         positions = _available_stop_positions(design)
         design.stop_after_element, design.stop_surface_index = random.choice(positions)
         design.explicit_stop_after_element = None
+    ensure_air_gap_clearances(design, options.get("minimum_edge_clearance_mm", 0.1))
     return True
 
 
@@ -418,7 +420,15 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
 
     design = deepcopy(source)
     design.settings.focal_length_target_mm = options["target_efl_mm"]
-    design.settings.f_number_target = options["target_f_number"]
+    design.settings.aperture_mode = options.get("aperture_mode") or "image_f_number"
+    aperture_value = float(options.get("target_aperture_value") or options["target_f_number"])
+    if design.settings.aperture_mode == "entrance_pupil_diameter":
+        design.settings.entrance_pupil_diameter_mm = aperture_value
+    elif design.settings.aperture_mode == "stop_semi_diameter":
+        design.settings.stop_semi_diameter_mm = aperture_value
+    else:
+        design.settings.f_number_target = options["target_f_number"]
+    design.settings.normalize()
     try:
         if (
             options.get("allow_element_count_search")
@@ -429,7 +439,7 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
             raise ValueError("element count constraint violated")
         if not design_matches_form(design, options.get("classic_form", "")):
             raise ValueError("classic form constraint violated")
-        if not _mechanically_valid(design):
+        if not _mechanically_valid(design, options.get("minimum_edge_clearance_mm", 0.1)):
             raise ValueError("mechanical bounds violated")
         system = OptilandAdapter().to_optic(design)
         if (
@@ -473,7 +483,10 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
         wavelengths = [float(value) for value in system.wavelengths.get_wavelengths()]
         field_weights = _normalize(resolved_field_weights(design.settings), len(fields))
         wavelength_weights = _normalize(design.settings.wavelength_weights, len(wavelengths))
-        airy_mm = max(1.22 * design.settings.primary_wavelength_um * 1e-3 * options["target_f_number"], 1e-5)
+        airy_mm = max(
+            1.22 * design.settings.primary_wavelength_um * 1e-3 * scalar_value(system.paraxial.FNO()),
+            1e-5,
+        )
         spots = SpotDiagram(
             system,
             fields=fields,
@@ -515,7 +528,7 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
             raise ValueError("non-finite merit")
         return score, design, {
             "effective_focal_length_mm": efl,
-            "image_f_number": float(system.paraxial.FNO()),
+            "image_f_number": scalar_value(system.paraxial.FNO()),
             "image_distance_mm": image_distance,
             "maximum_rms_spot_um": maximum_spot * 1000.0,
             "edge_distortion_percent": edge_distortion,
@@ -544,7 +557,7 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
         }
 
 
-def _mechanically_valid(design: OpticalDesign) -> bool:
+def _mechanically_valid(design: OpticalDesign, minimum_clearance_mm: float = 0.1) -> bool:
     for element in design.elements:
         if element.outer_diameter_mm > design.settings.max_outer_diameter_mm:
             return False
@@ -556,7 +569,7 @@ def _mechanically_valid(design: OpticalDesign) -> bool:
             return False
         if element.gap_max_mm is not None and element.gap_after_mm > element.gap_max_mm:
             return False
-    return True
+    return not mechanical_clearance_violations(design, minimum_clearance_mm)
 
 
 def _total_track_mm(design: OpticalDesign) -> float:

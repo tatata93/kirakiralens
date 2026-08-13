@@ -15,6 +15,15 @@ MATERIAL_ALIASES = {
 }
 
 
+def scalar_value(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        if hasattr(value, "item"):
+            return float(value.item())
+        return float(value[0])
+
+
 @dataclass(slots=True)
 class FirstOrderAnalysis:
     valid: bool
@@ -78,16 +87,22 @@ class OptilandAdapter:
                     element.outer_diameter_mm,
                     surface.clear_aperture_mm or element.outer_diameter_mm,
                 )
+                is_stop_surface = (
+                    design.explicit_stop_after_element is None
+                    and element_index == design.stop_after_element
+                    and local_index == stop_surface_index
+                )
+                if is_stop_surface and design.settings.aperture_mode == "stop_semi_diameter":
+                    clear_diameter = min(
+                        clear_diameter,
+                        2.0 * design.settings.stop_semi_diameter_mm,
+                    )
                 system.add_surface(
                     index=surface_number,
                     thickness=float(thickness),
                     surface_type=surface_type,
                     material=material,
-                    is_stop=(
-                        design.explicit_stop_after_element is None
-                        and element_index == design.stop_after_element
-                        and local_index == stop_surface_index
-                    ),
+                    is_stop=is_stop_surface,
                     comment=surface.comment or self._surface_comment(element.manufacturer, element.part_number, local_index),
                     aperture=physical_apertures.RadialAperture(r_max=float(clear_diameter) / 2.0),
                     **geometry_parameters,
@@ -95,6 +110,11 @@ class OptilandAdapter:
                 surface_number += 1
                 if explicit_stop_here:
                     remaining_gap = max(element.gap_after_mm - float(thickness), 0.0)
+                    stop_diameter = (
+                        2.0 * design.settings.stop_semi_diameter_mm
+                        if design.settings.aperture_mode == "stop_semi_diameter"
+                        else design.settings.max_outer_diameter_mm
+                    )
                     system.add_surface(
                         index=surface_number,
                         radius=inf,
@@ -103,12 +123,13 @@ class OptilandAdapter:
                         is_stop=True,
                         comment="Aperture stop",
                         aperture=physical_apertures.RadialAperture(
-                            r_max=float(design.settings.max_outer_diameter_mm) / 2.0
+                            r_max=float(stop_diameter) / 2.0
                         ),
                     )
                     surface_number += 1
         system.add_surface(index=surface_number, comment="Image")
-        system.set_aperture(aperture_type="imageFNO", value=design.settings.f_number_target)
+        aperture_type, aperture_value = self._aperture_definition(design)
+        system.set_aperture(aperture_type=aperture_type, value=aperture_value)
         system.set_field_type(field_type="angle")
         for field_angle in resolved_field_angles(design.settings):
             system.add_field(y=field_angle)
@@ -121,6 +142,15 @@ class OptilandAdapter:
             )
         system.update()
         return system
+
+    @staticmethod
+    def _aperture_definition(design: OpticalDesign) -> tuple[str, float]:
+        settings = design.settings
+        if settings.aperture_mode == "entrance_pupil_diameter":
+            return "EPD", float(settings.entrance_pupil_diameter_mm)
+        if settings.aperture_mode == "stop_semi_diameter":
+            return "float_by_stop_size", 2.0 * float(settings.stop_semi_diameter_mm)
+        return "imageFNO", float(settings.f_number_target)
 
     def analyze_first_order(self, design: OpticalDesign) -> FirstOrderAnalysis:
         if not design.elements:
@@ -156,8 +186,8 @@ class OptilandAdapter:
                 image_distance_mm=float(final_gap),
                 recommended_image_distance_mm=recommended_image_distance,
                 paraxial_focus_distance_mm=focus_distance,
-                image_f_number=float(system.paraxial.FNO()),
-                entrance_pupil_diameter_mm=float(system.paraxial.EPD()),
+                image_f_number=scalar_value(system.paraxial.FNO()),
+                entrance_pupil_diameter_mm=scalar_value(system.paraxial.EPD()),
                 total_track_mm=float(system.total_track),
                 angle_of_view_horizontal_deg=angles["horizontal_deg"],
                 angle_of_view_vertical_deg=angles["vertical_deg"],

@@ -233,6 +233,13 @@ def test_surface_table_edits_every_surface_and_image_focus() -> None:
     window.design.settings.auto_focus_enabled = True
     window.f_number.setValue(5.6)
     window._targets_changed()
+    assert window.design.settings.f_number_target == 5.6
+    window.aperture_mode.setCurrentIndex(window.aperture_mode.findData("entrance_pupil_diameter"))
+    window.aperture_value.setValue(10.0)
+    window._targets_changed()
+    assert window.design.settings.aperture_mode == "entrance_pupil_diameter"
+    assert window.design.settings.entrance_pupil_diameter_mm == 10.0
+    assert window.design.settings.estimated_f_number() == 5.0
     assert window.design.settings.auto_focus_enabled is True
     window.bfl_target.setValue(window.design.elements[-1].gap_after_mm + 1.0)
     window._targets_changed()
@@ -415,6 +422,7 @@ def test_patent_examples_can_be_replaced_and_split_with_catalog_lenses() -> None
     window.search_scope.setCurrentIndex(window.search_scope.findData("discrete"))
     window.maximum_elements.setValue(8)
     window.maximum_split_count.setValue(3)
+    window.minimum_edge_clearance.setValue(0.25)
 
     options = window._options()
     pool = window._candidate_pool()
@@ -423,6 +431,7 @@ def test_patent_examples_can_be_replaced_and_split_with_catalog_lenses() -> None
     assert options["allow_catalog_splitting"] is True
     assert options["maximum_element_count"] == 8
     assert options["maximum_split_count"] == 3
+    assert options["minimum_edge_clearance_mm"] == 0.25
     assert all(len(slot) > 1 for slot in pool)
     assert all(any(item["is_catalog"] for item in slot[1:]) for slot in pool)
     assert "最大8レンズ" in window.variable_count.text()

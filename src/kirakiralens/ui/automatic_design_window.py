@@ -100,7 +100,17 @@ class AutomaticDesignWindow(QMainWindow):
         self.target_efl = self._value_spin(0.1, 2000.0, self.design.settings.focal_length_target_mm, " mm")
         self.efl_tolerance = self._value_spin(0.001, 100.0, 0.5, " mm", 3)
         self.efl_hard = QCheckBox("必須")
-        self.target_f_number = self._value_spin(0.5, 64.0, self.design.settings.f_number_target, "", 2)
+        self.target_aperture_mode = QComboBox()
+        self.target_aperture_mode.addItem("像側F値", "image_f_number")
+        self.target_aperture_mode.addItem("入射瞳径", "entrance_pupil_diameter")
+        self.target_aperture_mode.addItem("絞り半径", "stop_semi_diameter")
+        self.target_aperture_mode.setCurrentIndex(
+            max(0, self.target_aperture_mode.findData(self.design.settings.aperture_mode))
+        )
+        self.target_aperture = self._value_spin(0.5, 64.0, self.design.settings.aperture_value, "", 2)
+        self.target_f_number = self.target_aperture
+        self.target_aperture_mode.currentIndexChanged.connect(self._target_aperture_mode_changed)
+        self._configure_target_aperture(self.design.settings.aperture_value)
         self.bfl_constraint = QComboBox()
         self.bfl_constraint.addItem("目標値", "target")
         self.bfl_constraint.addItem("以上", "minimum")
@@ -120,8 +130,9 @@ class AutomaticDesignWindow(QMainWindow):
         target_grid.addWidget(QLabel("許容差"), 0, 2)
         target_grid.addWidget(self.efl_tolerance, 0, 3)
         target_grid.addWidget(self.efl_hard, 0, 4)
-        target_grid.addWidget(QLabel("目標F値"), 1, 0)
-        target_grid.addWidget(self.target_f_number, 1, 1)
+        target_grid.addWidget(QLabel("開口条件"), 1, 0)
+        target_grid.addWidget(self.target_aperture_mode, 1, 1)
+        target_grid.addWidget(self.target_aperture, 1, 2)
         target_grid.addWidget(QLabel("バックフォーカス条件"), 2, 0)
         target_grid.addWidget(self.bfl_constraint, 2, 1)
         self.target_bfl_label = QLabel("目標BFL")
@@ -180,6 +191,8 @@ class AutomaticDesignWindow(QMainWindow):
         self.maximum_split_count.setRange(1, 6)
         self.maximum_split_count.setValue(2)
         self.maximum_split_count.setToolTip("1つの元レンズを何個までの市販レンズに分けて置換するか")
+        self.minimum_edge_clearance = self._value_spin(0.0, 10.0, 0.1, " mm", 3)
+        self.minimum_edge_clearance.setToolTip("曲面の縁を含め、隣接レンズ間に確保する最小すき間")
         self.minimum_elements = QSpinBox()
         self.minimum_elements.setRange(1, 20)
         self.minimum_elements.setValue(max(1, len(self.design.elements) - 1))
@@ -222,6 +235,8 @@ class AutomaticDesignWindow(QMainWindow):
         self.vary_air_gaps.setChecked(True)
         self.vary_image_plane = QCheckBox("像面位置")
         self.vary_image_plane.setChecked(True)
+        variable_layout.addWidget(QLabel("最小すき間"))
+        variable_layout.addWidget(self.minimum_edge_clearance)
         for widget in (self.vary_radii, self.vary_thicknesses, self.vary_air_gaps, self.vary_image_plane):
             variable_layout.addWidget(widget)
             widget.toggled.connect(self._refresh_variable_count)
@@ -442,7 +457,10 @@ class AutomaticDesignWindow(QMainWindow):
             return
         self.design = deepcopy(design)
         self.target_efl.setValue(design.settings.focal_length_target_mm)
-        self.target_f_number.setValue(design.settings.f_number_target)
+        self.target_aperture_mode.setCurrentIndex(
+            max(0, self.target_aperture_mode.findData(design.settings.aperture_mode))
+        )
+        self._configure_target_aperture(design.settings.aperture_value)
         self.target_bfl.setValue(design.settings.back_focus_target_mm)
         self.minimum_bfl.setValue(design.settings.back_focus_target_mm)
         self.minimum_elements.setValue(min(self.minimum_elements.value(), len(design.elements)))
@@ -482,7 +500,9 @@ class AutomaticDesignWindow(QMainWindow):
                 "target_efl_mm": self.target_efl.value(),
                 "efl_tolerance_mm": self.efl_tolerance.value(),
                 "efl_hard": self.efl_hard.isChecked(),
-                "target_f_number": self.target_f_number.value(),
+                "aperture_mode": self.target_aperture_mode.currentData(),
+                "target_aperture_value": self.target_aperture.value(),
+                "target_f_number": self._target_f_number(),
                 "bfl_constraint": self.bfl_constraint.currentData(),
                 "target_bfl_mm": self.target_bfl.value(),
                 "minimum_bfl_mm": self.minimum_bfl.value(),
@@ -509,8 +529,49 @@ class AutomaticDesignWindow(QMainWindow):
                 "maximum_split_count": self.maximum_split_count.value(),
                 "minimum_element_count": self.minimum_elements.value(),
                 "maximum_element_count": self.maximum_elements.value(),
+                "minimum_edge_clearance_mm": self.minimum_edge_clearance.value(),
             }
         )
+
+    def _target_aperture_mode_changed(self) -> None:
+        mode = str(self.target_aperture_mode.currentData())
+        if mode == "entrance_pupil_diameter":
+            value = self.design.settings.entrance_pupil_diameter_mm
+        elif mode == "stop_semi_diameter":
+            value = self.design.settings.stop_semi_diameter_mm
+        else:
+            value = self.design.settings.f_number_target
+        self._configure_target_aperture(value)
+
+    def _configure_target_aperture(self, value: float) -> None:
+        mode = str(self.target_aperture_mode.currentData())
+        self.target_aperture.blockSignals(True)
+        self.target_aperture.setPrefix("")
+        if mode == "entrance_pupil_diameter":
+            self.target_aperture.setRange(0.01, 10000.0)
+            self.target_aperture.setSuffix(" mm")
+        elif mode == "stop_semi_diameter":
+            self.target_aperture.setRange(0.005, 5000.0)
+            self.target_aperture.setSuffix(" mm")
+        else:
+            self.target_aperture.setRange(0.5, 64.0)
+            self.target_aperture.setSuffix("")
+            self.target_aperture.setPrefix("F/")
+        self.target_aperture.setValue(value)
+        self.target_aperture.blockSignals(False)
+
+    def _target_f_number(self) -> float:
+        mode = str(self.target_aperture_mode.currentData())
+        if mode == "entrance_pupil_diameter":
+            return self.target_efl.value() / max(self.target_aperture.value(), 0.01)
+        if mode == "stop_semi_diameter":
+            return self.target_efl.value() / max(2.0 * self.target_aperture.value(), 0.01)
+        return self.target_aperture.value()
+
+    def _target_entrance_pupil_diameter(self) -> float:
+        if self.target_aperture_mode.currentData() == "entrance_pupil_diameter":
+            return self.target_aperture.value()
+        return self.target_efl.value() / max(self._target_f_number(), 0.5)
 
     def _update_bfl_controls(self) -> None:
         mode = self.bfl_constraint.currentData()
@@ -546,7 +607,7 @@ class AutomaticDesignWindow(QMainWindow):
         pool: list[list[dict]] = []
         minimum_aperture = max(
             5.0,
-            0.4 * self.target_efl.value() / max(self.target_f_number.value(), 0.5),
+            0.4 * self._target_entrance_pupil_diameter(),
         )
         for element in self.design.elements:
             candidates = [deepcopy(element)]
@@ -581,7 +642,7 @@ class AutomaticDesignWindow(QMainWindow):
     def _topology_pool(self) -> list[dict]:
         minimum_aperture = max(
             5.0,
-            0.4 * self.target_efl.value() / max(self.target_f_number.value(), 0.5),
+            0.4 * self._target_entrance_pupil_diameter(),
         )
         maximum_diameter = self.design.settings.max_outer_diameter_mm
         manufacturer = str(self.manufacturer.currentData())
@@ -608,7 +669,7 @@ class AutomaticDesignWindow(QMainWindow):
 
     def _classic_candidate_payload(self) -> tuple[list[list[dict]], OpticalDesign]:
         form = classic_form(str(self.classic_form.currentData()))
-        minimum_aperture = self.target_efl.value() / max(self.target_f_number.value(), 0.5)
+        minimum_aperture = self._target_entrance_pupil_diameter()
         manufacturer = str(self.manufacturer.currentData())
         pool_elements: list[list[LensElement]] = []
         for slot in form.slots:
@@ -763,7 +824,7 @@ class AutomaticDesignWindow(QMainWindow):
         rows = [
             ("評価スコア", result.get("initial_score"), 0.0, result.get("best_score")),
             ("実効焦点距離 [mm]", None, targets.get("effective_focal_length_mm"), metrics.get("effective_focal_length_mm")),
-            ("F値", self.design.settings.f_number_target, targets.get("f_number"), metrics.get("image_f_number")),
+            ("実際のF値", self.design.settings.estimated_f_number(), targets.get("f_number"), metrics.get("image_f_number")),
             ("像面位置 [mm]", self.design.elements[-1].gap_after_mm, bfl_target, metrics.get("image_distance_mm")),
             ("最大RMSスポット [µm]", None, None, metrics.get("maximum_rms_spot_um")),
             (

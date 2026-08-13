@@ -143,12 +143,21 @@ class MainWindow(QMainWindow):
         self.focal_target.setValue(self.design.settings.focal_length_target_mm)
         self.focal_target.setMaximumWidth(110)
         toolbar.addWidget(self.focal_target)
-        toolbar.addWidget(QLabel("F値"))
-        self.f_number = spin_box(0.5, 64.0, 1, "")
-        self.f_number.setPrefix("F/")
-        self.f_number.setValue(self.design.settings.f_number_target)
-        self.f_number.setMaximumWidth(90)
-        toolbar.addWidget(self.f_number)
+        toolbar.addWidget(QLabel("開口"))
+        self.aperture_mode = QComboBox()
+        self.aperture_mode.addItem("F値", "image_f_number")
+        self.aperture_mode.addItem("入射瞳径", "entrance_pupil_diameter")
+        self.aperture_mode.addItem("絞り半径", "stop_semi_diameter")
+        self.aperture_mode.setMaximumWidth(105)
+        self.aperture_mode.setCurrentIndex(
+            max(0, self.aperture_mode.findData(self.design.settings.aperture_mode))
+        )
+        toolbar.addWidget(self.aperture_mode)
+        self.aperture_value = spin_box(0.5, 64.0, 2, "")
+        self.aperture_value.setMaximumWidth(100)
+        self.f_number = self.aperture_value
+        self._configure_aperture_control()
+        toolbar.addWidget(self.aperture_value)
         toolbar.addWidget(QLabel("BFL"))
         self.bfl_target = spin_box(0.1, 1000.0, 2)
         self.bfl_target.setValue(
@@ -177,7 +186,7 @@ class MainWindow(QMainWindow):
         self.catalog_panel = CatalogPanel(self.repository, self)
         self.catalog_panel.set_design_targets(
             self.design.settings.focal_length_target_mm,
-            self.design.settings.f_number_target,
+            self.design.settings.estimated_f_number(),
             self.design.settings.max_outer_diameter_mm,
         )
         catalog_dock = QDockWidget("レンズカタログ", self)
@@ -265,7 +274,8 @@ class MainWindow(QMainWindow):
         self.surface_table.designChanged.connect(self._design_changed)
         self.surface_table.surfaceSelected.connect(lambda element, surface: self._select("surface", element, surface))
         self.surface_table.imageSelected.connect(self.open_system_settings)
-        for widget in (self.focal_target, self.f_number, self.bfl_target, self.max_diameter):
+        self.aperture_mode.currentIndexChanged.connect(self._aperture_mode_changed)
+        for widget in (self.focal_target, self.aperture_value, self.bfl_target, self.max_diameter):
             widget.editingFinished.connect(self._targets_changed)
 
     def _refresh_all(self) -> None:
@@ -289,11 +299,14 @@ class MainWindow(QMainWindow):
         self._sync_target_controls()
 
     def _sync_target_controls(self) -> None:
-        controls = (self.focal_target, self.f_number, self.bfl_target, self.max_diameter)
+        controls = (self.focal_target, self.aperture_mode, self.aperture_value, self.bfl_target, self.max_diameter)
         for control in controls:
             control.blockSignals(True)
         self.focal_target.setValue(self.design.settings.focal_length_target_mm)
-        self.f_number.setValue(self.design.settings.f_number_target)
+        self.aperture_mode.setCurrentIndex(
+            max(0, self.aperture_mode.findData(self.design.settings.aperture_mode))
+        )
+        self._configure_aperture_control()
         self.bfl_target.setValue(
             self.design.elements[-1].gap_after_mm if self.design.elements else self.design.settings.back_focus_target_mm
         )
@@ -303,7 +316,8 @@ class MainWindow(QMainWindow):
 
     def _targets_changed(self) -> None:
         self.design.settings.focal_length_target_mm = self.focal_target.value()
-        self.design.settings.f_number_target = self.f_number.value()
+        self.design.settings.aperture_mode = str(self.aperture_mode.currentData())
+        self.design.settings.set_aperture_value(self.aperture_value.value())
         requested_bfl = self.bfl_target.value()
         self.design.settings.max_outer_diameter_mm = self.max_diameter.value()
         if self.design.elements:
@@ -320,10 +334,45 @@ class MainWindow(QMainWindow):
             self.design.settings.back_focus_target_mm = requested_bfl
         self.catalog_panel.set_design_targets(
             self.focal_target.value(),
-            self.f_number.value(),
+            self.design.settings.estimated_f_number(),
             self.max_diameter.value(),
         )
         self._design_changed()
+
+    def _aperture_mode_changed(self) -> None:
+        self.design.settings.aperture_mode = str(self.aperture_mode.currentData())
+        self._configure_aperture_control()
+        self.catalog_panel.set_design_targets(
+            self.focal_target.value(),
+            self.design.settings.estimated_f_number(),
+            self.max_diameter.value(),
+        )
+        self._design_changed()
+
+    def _configure_aperture_control(self) -> None:
+        mode = str(self.aperture_mode.currentData())
+        self.aperture_value.blockSignals(True)
+        self.aperture_value.setPrefix("")
+        if mode == "entrance_pupil_diameter":
+            self.aperture_value.setRange(0.01, 10000.0)
+            self.aperture_value.setDecimals(2)
+            self.aperture_value.setSuffix(" mm")
+            self.aperture_value.setValue(self.design.settings.entrance_pupil_diameter_mm)
+            self.aperture_value.setToolTip("物体側から見た入射瞳の直径")
+        elif mode == "stop_semi_diameter":
+            self.aperture_value.setRange(0.005, 5000.0)
+            self.aperture_value.setDecimals(2)
+            self.aperture_value.setSuffix(" mm")
+            self.aperture_value.setValue(self.design.settings.stop_semi_diameter_mm)
+            self.aperture_value.setToolTip("選択した絞り面の開口半径")
+        else:
+            self.aperture_value.setRange(0.5, 64.0)
+            self.aperture_value.setDecimals(2)
+            self.aperture_value.setSuffix("")
+            self.aperture_value.setPrefix("F/")
+            self.aperture_value.setValue(self.design.settings.f_number_target)
+            self.aperture_value.setToolTip("像側F値")
+        self.aperture_value.blockSignals(False)
 
     def _catalog_selected(self, product_id: int) -> None:
         self._selected_catalog_product = product_id

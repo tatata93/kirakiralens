@@ -7,7 +7,7 @@ import numpy as np
 
 from ..domain import OpticalDesign
 from .configuration import resolved_field_angles, sensor_angle_of_view
-from .optiland_adapter import OptilandAdapter
+from .optiland_adapter import OptilandAdapter, scalar_value
 
 
 QUALITY_PRESETS = {
@@ -206,7 +206,7 @@ def _spot_and_mtf(
     base_frequencies = np.linspace(0.0, max_frequency, curve_points)
     frequencies = np.array(sorted(set(base_frequencies.tolist() + [10.0, 20.0, 40.0])))
     frequencies = frequencies[frequencies <= max_frequency]
-    f_number = abs(float(system.paraxial.FNO()))
+    f_number = abs(scalar_value(system.paraxial.FNO()))
     spectral_weights = np.asarray((wavelength_weights + [1.0] * len(wavelengths))[: len(wavelengths)], dtype=float)
     spectral_weights = _normalized_weights(spectral_weights)
     spot_fields = []

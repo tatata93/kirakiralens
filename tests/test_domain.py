@@ -38,3 +38,15 @@ def test_older_designs_default_to_automatic_image_focus() -> None:
     restored = OpticalDesign.from_dict(data)
 
     assert restored.settings.auto_focus_enabled is True
+
+
+def test_aperture_modes_round_trip_and_estimate_f_number() -> None:
+    design = OpticalDesign.starter()
+    design.settings.aperture_mode = "entrance_pupil_diameter"
+    design.settings.set_aperture_value(10.0)
+
+    restored = OpticalDesign.from_dict(design.to_dict())
+
+    assert restored.settings.aperture_mode == "entrance_pupil_diameter"
+    assert restored.settings.aperture_value == 10.0
+    assert restored.settings.estimated_f_number() == 5.0

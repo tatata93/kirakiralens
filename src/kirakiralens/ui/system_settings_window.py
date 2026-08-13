@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSpinBox,
+    QSizePolicy,
+    QStackedWidget,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -123,6 +125,7 @@ class SystemSettingsWindow(QDialog):
         layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_image_tab(), "像面")
+        self.tabs.addTab(self._build_aperture_tab(), "開口")
         self.tabs.addTab(self._build_field_tab(), "視野・光線")
         self.tabs.addTab(self._build_wavelength_tab(), "波長")
         layout.addWidget(self.tabs, 1)
@@ -169,6 +172,34 @@ class SystemSettingsWindow(QDialog):
         self.sensor_width.valueChanged.connect(self._sensor_size_changed)
         self.sensor_height.valueChanged.connect(self._sensor_size_changed)
         self.infinite_object.toggled.connect(lambda checked: self.object_distance.setEnabled(not checked))
+        return page
+
+    def _build_aperture_tab(self) -> QWidget:
+        page = QWidget()
+        form = QFormLayout(page)
+        self.aperture_mode = QComboBox()
+        self.aperture_mode.addItem("像側F値 (FNO)", "image_f_number")
+        self.aperture_mode.addItem("入射瞳径 (EPD)", "entrance_pupil_diameter")
+        self.aperture_mode.addItem("絞り面の半径", "stop_semi_diameter")
+        self.aperture_stack = QStackedWidget()
+        self.aperture_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.aperture_f_number = self._double_spin(0.5, 64.0, 3, "")
+        self.aperture_f_number.setPrefix("F/")
+        self.aperture_epd = self._double_spin(0.01, 10000.0, 3, " mm")
+        self.aperture_stop_radius = self._double_spin(0.005, 5000.0, 3, " mm")
+        self.aperture_stack.addWidget(self.aperture_f_number)
+        self.aperture_stack.addWidget(self.aperture_epd)
+        self.aperture_stack.addWidget(self.aperture_stop_radius)
+        self.aperture_stack.setFixedHeight(self.aperture_f_number.sizeHint().height())
+        note = QLabel(
+            "F値は像側の光束、入射瞳径は物体側から見た瞳径、絞り半径は選択中の絞り面の実寸で光束を定義します。"
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #59635f;")
+        form.addRow("指定方法", self.aperture_mode)
+        form.addRow("指定値", self.aperture_stack)
+        form.addRow(note)
+        self.aperture_mode.currentIndexChanged.connect(self.aperture_stack.setCurrentIndex)
         return page
 
     def _build_field_tab(self) -> QWidget:
@@ -249,6 +280,12 @@ class SystemSettingsWindow(QDialog):
         self.infinite_object.setChecked(infinite_object)
         self.object_distance.setValue(1000.0 if infinite_object else settings.object_distance_mm)
         self.object_distance.setEnabled(not infinite_object)
+        aperture_index = max(0, self.aperture_mode.findData(settings.aperture_mode))
+        self.aperture_mode.setCurrentIndex(aperture_index)
+        self.aperture_stack.setCurrentIndex(aperture_index)
+        self.aperture_f_number.setValue(settings.f_number_target)
+        self.aperture_epd.setValue(settings.entrance_pupil_diameter_mm)
+        self.aperture_stop_radius.setValue(settings.stop_semi_diameter_mm)
         self.field_mode.setCurrentIndex(max(0, self.field_mode.findData(settings.field_mode)))
         self._set_field_editor(settings.field_mode)
         self.layout_rays.setValue(settings.layout_ray_count)
@@ -366,6 +403,10 @@ class SystemSettingsWindow(QDialog):
         )
         settings.cover_glass_thickness_mm = self.cover_glass.value()
         settings.object_distance_mm = inf if self.infinite_object.isChecked() else self.object_distance.value()
+        settings.aperture_mode = str(self.aperture_mode.currentData())
+        settings.f_number_target = self.aperture_f_number.value()
+        settings.entrance_pupil_diameter_mm = self.aperture_epd.value()
+        settings.stop_semi_diameter_mm = self.aperture_stop_radius.value()
         if self.design.elements:
             self.design.elements[-1].gap_after_mm = self.image_distance.value()
             self.design.elements[-1].gap_locked = self.image_distance_lock.isChecked()

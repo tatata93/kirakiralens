@@ -63,6 +63,35 @@ def test_configured_fields_wavelengths_and_weights_reach_optiland(monkeypatch, t
     assert [wavelength.weight for wavelength in system.wavelengths.wavelengths] == [0.5, 2.0, 1.5]
 
 
+def test_f_number_entrance_pupil_and_stop_radius_apertures_reach_optiland(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    adapter = OptilandAdapter()
+    expected = {
+        "image_f_number": (5.6, "imageFNO", 5.6),
+        "entrance_pupil_diameter": (10.0, "EPD", 10.0),
+        "stop_semi_diameter": (4.0, "float_by_stop_size", 8.0),
+    }
+
+    for mode, (value, optiland_mode, optiland_value) in expected.items():
+        design = OpticalDesign.starter()
+        design.settings.aperture_mode = mode
+        design.settings.set_aperture_value(value)
+        system = adapter.to_optic(design)
+        result = adapter.analyze_first_order(design)
+
+        assert system.aperture.ap_type == optiland_mode
+        assert system.aperture.value == optiland_value
+        assert result.valid, result.error
+        assert result.image_f_number is not None and result.image_f_number > 0
+        assert result.entrance_pupil_diameter_mm is not None and result.entrance_pupil_diameter_mm > 0
+
+    stop_index = system.surface_group.stop_index
+    assert float(system.surface_group.surfaces[stop_index].aperture.r_max) == 4.0
+
+
 def test_recommended_image_distance_tracks_the_lens_focus(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
     design = OpticalDesign.starter()
