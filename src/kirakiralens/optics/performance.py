@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from math import pi
+from math import pi, radians, tan
 from typing import Any, Callable
 
 import numpy as np
@@ -79,13 +79,20 @@ def evaluate_performance(design: OpticalDesign, options: dict[str, Any] | None =
         fields = [tuple(map(float, field)) for field in system.fields.get_field_coords()]
         wavelengths = [float(value) for value in system.wavelengths.get_wavelengths()]
         field_angles = resolved_field_angles(design.settings)
-        result["angle_of_view"] = sensor_angle_of_view(design.settings, float(system.paraxial.f2()))
+        effective_focal_length = abs(float(system.paraxial.f2()))
+        field_heights_mm = [_image_height_mm(effective_focal_length, angle) for angle in field_angles]
+        result["angle_of_view"] = sensor_angle_of_view(design.settings, effective_focal_length)
         result["fields"] = [
             {
                 "index": index,
                 "fraction": float(field[1]),
                 "angle_deg": field_angles[index],
-                "label": _field_label(float(field[1]), field_angles[index]),
+                "image_height_mm": field_heights_mm[index],
+                "label": _field_label(
+                    float(field[1]),
+                    field_angles[index],
+                    field_heights_mm[index],
+                ),
             }
             for index, field in enumerate(fields)
         ]
@@ -113,6 +120,7 @@ def evaluate_performance(design: OpticalDesign, options: dict[str, Any] | None =
             int(resolved["curve_points"]),
             design.settings.wavelength_weights,
             field_angles,
+            field_heights_mm,
         ),
     )
     if spot_analysis:
@@ -120,7 +128,14 @@ def evaluate_performance(design: OpticalDesign, options: dict[str, Any] | None =
 
     result["ray_fan"] = run(
         "Transverse ray aberration",
-        lambda: _ray_fan(system, fields, wavelengths, int(resolved["ray_points"]), field_angles),
+        lambda: _ray_fan(
+            system,
+            fields,
+            wavelengths,
+            int(resolved["ray_points"]),
+            field_angles,
+            field_heights_mm,
+        ),
     ) or {}
     result["longitudinal"] = run(
         "Longitudinal aberration",
@@ -133,11 +148,23 @@ def evaluate_performance(design: OpticalDesign, options: dict[str, Any] | None =
     ) or {}
     result["field_curvature"] = run(
         "Field curvature",
-        lambda: _field_curvature(system, wavelengths, int(resolved["curve_points"])),
+        lambda: _field_curvature(
+            system,
+            wavelengths,
+            int(resolved["curve_points"]),
+            max(field_angles, default=0.0),
+            effective_focal_length,
+        ),
     ) or {}
     result["distortion"] = run(
         "Distortion",
-        lambda: _distortion(system, wavelengths, int(resolved["curve_points"])),
+        lambda: _distortion(
+            system,
+            wavelengths,
+            int(resolved["curve_points"]),
+            max(field_angles, default=0.0),
+            effective_focal_length,
+        ),
     ) or {}
     result["distortion_grid"] = run(
         "Grid distortion",
@@ -169,6 +196,10 @@ def minimum_polychromatic_mtf(system, design: OpticalDesign, frequency_lp_mm: fl
         11,
         design.settings.wavelength_weights,
         resolved_field_angles(design.settings),
+        [
+            _image_height_mm(abs(float(system.paraxial.f2())), angle)
+            for angle in resolved_field_angles(design.settings)
+        ],
     )
     key = str(int(frequency_lp_mm))
     values = [
@@ -191,6 +222,7 @@ def _spot_and_mtf(
     curve_points,
     wavelength_weights,
     field_angles,
+    field_heights_mm,
 ):
     from optiland.analysis import SpotDiagram
 
@@ -250,7 +282,12 @@ def _spot_and_mtf(
             {
                 "field": float(fields[field_index][1]),
                 "angle_deg": field_angles[field_index],
-                "label": _field_label(float(fields[field_index][1]), field_angles[field_index]),
+                "image_height_mm": field_heights_mm[field_index],
+                "label": _field_label(
+                    float(fields[field_index][1]),
+                    field_angles[field_index],
+                    field_heights_mm[field_index],
+                ),
                 "rms_um": rms_um,
                 "r80_um": r80_um,
                 "series": series,
@@ -270,7 +307,12 @@ def _spot_and_mtf(
             {
                 "field": float(fields[field_index][1]),
                 "angle_deg": field_angles[field_index],
-                "label": _field_label(float(fields[field_index][1]), field_angles[field_index]),
+                "image_height_mm": field_heights_mm[field_index],
+                "label": _field_label(
+                    float(fields[field_index][1]),
+                    field_angles[field_index],
+                    field_heights_mm[field_index],
+                ),
                 "tangential": _float_list(tangential),
                 "sagittal": _float_list(sagittal),
                 "at": {
@@ -297,7 +339,7 @@ def _spot_and_mtf(
     )
 
 
-def _ray_fan(system, fields, wavelengths, num_points, field_angles):
+def _ray_fan(system, fields, wavelengths, num_points, field_angles, field_heights_mm):
     from optiland.analysis import RayFan
 
     analysis = RayFan(system, fields=fields, wavelengths=wavelengths, num_points=num_points)
@@ -327,7 +369,12 @@ def _ray_fan(system, fields, wavelengths, num_points, field_angles):
             {
                 "field": float(field[1]),
                 "angle_deg": field_angles[field_index],
-                "label": _field_label(float(field[1]), field_angles[field_index]),
+                "image_height_mm": field_heights_mm[field_index],
+                "label": _field_label(
+                    float(field[1]),
+                    field_angles[field_index],
+                    field_heights_mm[field_index],
+                ),
                 "tangential": tangential,
                 "sagittal": sagittal,
                 "rms_um": float(np.sqrt(np.mean(all_errors**2))),
@@ -367,11 +414,15 @@ def _longitudinal_aberration(system, wavelengths, primary_wavelength, num_points
     }
 
 
-def _field_curvature(system, wavelengths, num_points):
+def _field_curvature(system, wavelengths, num_points, maximum_field_angle_deg, effective_focal_length_mm):
     from optiland.analysis import FieldCurvature
 
     analysis = FieldCurvature(system, wavelengths=wavelengths, num_points=num_points)
     field = np.linspace(0.0, 1.0, num_points)
+    image_height_mm = [
+        _image_height_mm(effective_focal_length_mm, maximum_field_angle_deg * float(fraction))
+        for fraction in field
+    ]
     series = []
     for wavelength, wave_data in zip(wavelengths, analysis.data, strict=True):
         series.append(
@@ -381,19 +432,33 @@ def _field_curvature(system, wavelengths, num_points):
                 "sagittal_mm": _float_list(wave_data[1]),
             }
         )
-    return {"field": _float_list(field), "series": series}
+    return {
+        "field": _float_list(field),
+        "image_height_mm": image_height_mm,
+        "maximum_image_height_mm": max(image_height_mm, default=0.0),
+        "series": series,
+    }
 
 
-def _distortion(system, wavelengths, num_points):
+def _distortion(system, wavelengths, num_points, maximum_field_angle_deg, effective_focal_length_mm):
     from optiland.analysis import Distortion
 
     analysis = Distortion(system, wavelengths=wavelengths, num_points=num_points, distortion_type="f-tan")
     field = np.linspace(0.0, 1.0, num_points)
+    image_height_mm = [
+        _image_height_mm(effective_focal_length_mm, maximum_field_angle_deg * float(fraction))
+        for fraction in field
+    ]
     series = [
         {"wavelength_um": wavelength, "percent": _float_list(values)}
         for wavelength, values in zip(wavelengths, analysis.data, strict=True)
     ]
-    return {"field": _float_list(field), "series": series}
+    return {
+        "field": _float_list(field),
+        "image_height_mm": image_height_mm,
+        "maximum_image_height_mm": max(image_height_mm, default=0.0),
+        "series": series,
+    }
 
 
 def _grid_distortion(system, primary_wavelength, num_points):
@@ -508,6 +573,8 @@ def _build_summary(result: dict[str, Any]) -> dict[str, Any]:
         "field_rows": [
             {
                 "label": mtf_field["label"],
+                "field_fraction": mtf_field.get("field"),
+                "image_height_mm": mtf_field.get("image_height_mm"),
                 "mtf10_t": mtf_field.get("at", {}).get("10", {}).get("tangential"),
                 "mtf10_s": mtf_field.get("at", {}).get("10", {}).get("sagittal"),
                 "mtf20_t": mtf_field.get("at", {}).get("20", {}).get("tangential"),
@@ -619,10 +686,19 @@ def _last_finite(values: list[float | None]) -> float | None:
     return None
 
 
-def _field_label(fraction: float, angle_deg: float | None = None) -> str:
+def _field_label(
+    fraction: float,
+    angle_deg: float | None = None,
+    image_height_mm: float | None = None,
+) -> str:
     angle = "" if angle_deg is None else f" / {angle_deg:.2f}°"
+    height = "" if image_height_mm is None else f" / {image_height_mm:.2f} mm"
     if abs(fraction) < 1e-6:
-        return f"中心{angle}"
+        return f"中心 0%{height}{angle}"
     if abs(fraction - 1.0) < 1e-6:
-        return f"隅{angle}"
-    return f"像高 {fraction:.0%}{angle}"
+        return f"隅 100%{height}{angle}"
+    return f"像高 {fraction:.0%}{height}{angle}"
+
+
+def _image_height_mm(effective_focal_length_mm: float, field_angle_deg: float) -> float:
+    return abs(float(effective_focal_length_mm)) * tan(radians(abs(float(field_angle_deg))))

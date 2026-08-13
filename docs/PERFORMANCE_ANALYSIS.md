@@ -10,7 +10,8 @@ an unchanged design with unchanged analysis settings reuses the previous result.
 ## Implemented analyses
 
 Field plots use either configurable fractions of the selected sensor's diagonal
-field or user-entered half-angles. Every field label includes its actual angle.
+field or user-entered half-angles. Every field label includes its normalized
+field, paraxial image height in millimetres, and actual angle.
 The default spectral samples are Fraunhofer F, d, and C lines at 0.48613,
 0.58756, and 0.65627 µm. Wavelength and field weights are editable.
 
@@ -31,9 +32,9 @@ The default spectral samples are Fraunhofer F, d, and C lines at 0.48613,
   normalized pupil coordinate. A common d-line paraxial reference preserves
   both longitudinal spherical aberration and axial chromatic aberration.
 - **Field curvature and astigmatism:** tangential and sagittal focus shift in mm
-  over normalized field, calculated by Optiland's parabasal-ray analysis.
-- **Distortion:** f-tan distortion in percent over normalized field for every
-  wavelength.
+  against physical image height, calculated by Optiland's parabasal-ray analysis.
+- **Distortion:** f-tan distortion in percent against physical image height for
+  every wavelength.
 - **Distortion grid:** a two-dimensional f-tan chief-ray map overlays the ideal
   image grid and the real traced image grid at the primary wavelength. Maximum
   radial displacement is reported as a percentage of ideal image radius, with
@@ -44,6 +45,16 @@ The default spectral samples are Fraunhofer F, d, and C lines at 0.48613,
   are retained alongside the direct curvature result.
 - **Image geometry:** the result stores and displays horizontal, vertical, and
   diagonal angle of view calculated from the configured sensor and actual EFL.
+
+Longitudinal aberration, field curvature/astigmatism, and distortion are shown
+side by side as a conventional field-aberration sheet. The latter two label
+every vertical tick with normalized field and physical image height together,
+for example `100% / 21.63`.
+
+Every graph has an independent `軸範囲` control. X and Y can each use the
+analysis default or user-entered minimum and maximum values. Manual ranges
+survive recalculation in the same performance window so prescriptions can be
+compared at a fixed scale.
 
 The result dictionary contains a `summary.merit_metrics` section with stable
 keys for the future optimizer: `mtf40_min`, `corner_rms_spot_um`,

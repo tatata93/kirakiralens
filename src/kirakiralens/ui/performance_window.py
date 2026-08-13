@@ -100,8 +100,7 @@ class PerformanceWindow(QMainWindow):
         self._build_mtf_tab()
         self._build_spot_tab()
         self._build_ray_fan_tab()
-        self._build_longitudinal_tab()
-        self._build_field_tab()
+        self._build_aberration_tab()
         self._build_distortion_grid_tab()
         layout.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
@@ -111,7 +110,7 @@ class PerformanceWindow(QMainWindow):
         layout = QVBoxLayout(page)
         self.summary_table = QTableWidget(0, 9)
         self.summary_table.setHorizontalHeaderLabels(
-            ["像高", "MTF10 T", "MTF10 S", "MTF20 T", "MTF20 S", "MTF40 T", "MTF40 S", "RMSスポット", "80%半径"]
+            ["像高（比率 / mm）", "MTF10 T", "MTF10 S", "MTF20 T", "MTF20 S", "MTF40 T", "MTF40 S", "RMSスポット", "80%半径"]
         )
         self.summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.summary_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -180,18 +179,23 @@ class PerformanceWindow(QMainWindow):
         scroll.setWidget(self.ray_content)
         self.tabs.addTab(scroll, "横収差")
 
-    def _build_longitudinal_tab(self) -> None:
+    def _build_aberration_tab(self) -> None:
+        self.aberration_content = QWidget()
+        self.aberration_content.setMinimumWidth(1080)
+        layout = QHBoxLayout(self.aberration_content)
+        layout.setContentsMargins(4, 4, 4, 4)
         self.longitudinal_plot = PlotWidget()
-        self.tabs.addTab(self.longitudinal_plot, "縦収差")
-
-    def _build_field_tab(self) -> None:
-        page = QWidget()
-        layout = QHBoxLayout(page)
         self.field_plot = PlotWidget()
         self.distortion_plot = PlotWidget()
+        for plot in (self.longitudinal_plot, self.field_plot, self.distortion_plot):
+            plot.setMinimumWidth(340)
+        layout.addWidget(self.longitudinal_plot, 1)
         layout.addWidget(self.field_plot, 1)
         layout.addWidget(self.distortion_plot, 1)
-        self.tabs.addTab(page, "像面・歪曲")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.aberration_content)
+        self.tabs.addTab(scroll, "収差図")
 
     def _build_distortion_grid_tab(self) -> None:
         self.distortion_grid_plot = PlotWidget(equal_axes=True)
@@ -410,29 +414,58 @@ class PerformanceWindow(QMainWindow):
         )
 
     def _render_field_and_distortion(self, field_curvature: dict, distortion: dict) -> None:
-        field_axis = field_curvature.get("field", [])
+        field_axis = field_curvature.get("image_height_mm", [])
+        maximum_image_height = float(field_curvature.get("maximum_image_height_mm") or max(field_axis, default=0.0))
         field_series = []
         for index, wave in enumerate(field_curvature.get("series", [])):
             color = WAVELENGTH_COLORS[index % len(WAVELENGTH_COLORS)]
             field_series.extend(
                 [
-                    {"label": f"{wave['wavelength_um']:.4f} T", "x": field_axis, "y": wave["tangential_mm"], "color": color},
-                    {"label": f"{wave['wavelength_um']:.4f} S", "x": field_axis, "y": wave["sagittal_mm"], "color": color, "dashed": True},
+                    {
+                        "label": f"{wave['wavelength_um'] * 1000:.0f} T",
+                        "x": wave["tangential_mm"],
+                        "y": field_axis,
+                        "color": color,
+                    },
+                    {
+                        "label": f"{wave['wavelength_um'] * 1000:.0f} S",
+                        "x": wave["sagittal_mm"],
+                        "y": field_axis,
+                        "color": color,
+                        "dashed": True,
+                    },
                 ]
             )
-        self.field_plot.set_plot("像面湾曲・非点収差", "正規化像高", "焦点移動 [mm]", field_series, (0, 1))
+        self.field_plot.set_plot(
+            "像面湾曲・非点収差",
+            "焦点移動 [mm]",
+            "像高（比率 / mm）",
+            field_series,
+            y_range=(0, maximum_image_height) if maximum_image_height > 0 else None,
+            y_tick_formatter=self._field_height_tick_formatter(maximum_image_height),
+        )
 
-        distortion_axis = distortion.get("field", [])
+        distortion_axis = distortion.get("image_height_mm", [])
+        distortion_maximum_height = float(
+            distortion.get("maximum_image_height_mm") or max(distortion_axis, default=0.0)
+        )
         distortion_series = [
             {
-                "label": f"{wave['wavelength_um']:.4f} µm",
-                "x": distortion_axis,
-                "y": wave["percent"],
+                "label": f"{wave['wavelength_um'] * 1000:.0f} nm",
+                "x": wave["percent"],
+                "y": distortion_axis,
                 "color": WAVELENGTH_COLORS[index % len(WAVELENGTH_COLORS)],
             }
             for index, wave in enumerate(distortion.get("series", []))
         ]
-        self.distortion_plot.set_plot("歪曲収差 (f-tan)", "正規化像高", "歪曲 [%]", distortion_series, (0, 1))
+        self.distortion_plot.set_plot(
+            "歪曲収差 (f-tan)",
+            "歪曲 [%]",
+            "像高（比率 / mm）",
+            distortion_series,
+            y_range=(0, distortion_maximum_height) if distortion_maximum_height > 0 else None,
+            y_tick_formatter=self._field_height_tick_formatter(distortion_maximum_height),
+        )
 
     def _render_distortion_grid(self, grid: dict) -> None:
         ideal_x = grid.get("ideal_x_mm", [])
@@ -485,6 +518,16 @@ class PerformanceWindow(QMainWindow):
         if value is None:
             return "-"
         return f"{float(value):.{decimals}f}"
+
+    @staticmethod
+    def _field_height_tick_formatter(maximum_height_mm: float):
+        if maximum_height_mm <= 0:
+            return None
+
+        def format_tick(value: float) -> str:
+            return f"{value / maximum_height_mm:.0%} / {value:.2f}"
+
+        return format_tick
 
     def shutdown(self) -> None:
         self._controller.shutdown()

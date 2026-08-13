@@ -25,6 +25,14 @@ def test_performance_metrics_and_window_are_populated() -> None:
     assert len(result["longitudinal"]["series"]) == 3
     assert len(result["field_curvature"]["series"]) == 3
     assert len(result["distortion"]["series"]) == 3
+    assert result["fields"][-1]["fraction"] == 1.0
+    assert abs(result["fields"][-1]["image_height_mm"] - 21.6333) < 0.001
+    assert "100%" in result["fields"][-1]["label"]
+    assert "21.63 mm" in result["fields"][-1]["label"]
+    assert result["field_curvature"]["image_height_mm"][-1] == result["fields"][-1]["image_height_mm"]
+    assert result["distortion"]["image_height_mm"][-1] == result["fields"][-1]["image_height_mm"]
+    assert result["summary"]["field_rows"][-1]["field_fraction"] == 1.0
+    assert abs(result["summary"]["field_rows"][-1]["image_height_mm"] - 21.6333) < 0.001
     assert result["petzval"]["curvature_per_mm"] != 0
     assert result["petzval"]["radius_mm"] is not None
     assert result["distortion_grid"]["grid_points"] == 9
@@ -42,10 +50,18 @@ def test_performance_metrics_and_window_are_populated() -> None:
     window._render_result(result)
     window.show()
     application.processEvents()
-    assert window.tabs.count() == 7
+    assert window.tabs.count() == 6
     assert window.summary_table.rowCount() == 3
     assert len(window.mtf_plot.series) == 6
     assert all(plot.series for plot in window.spot_plots)
+    assert window.field_plot.series[0]["y"] == result["field_curvature"]["image_height_mm"]
+    assert window.field_plot.series[0]["x"] == result["field_curvature"]["series"][0]["tangential_mm"]
+    assert window.distortion_plot.series[0]["y"] == result["distortion"]["image_height_mm"]
+    assert window.field_plot.y_tick_formatter(21.6333).startswith("100%")
+    window.field_plot.set_user_ranges((-2.0, 2.0), (0.0, 22.0))
+    window._render_result(result)
+    assert window.field_plot.current_ranges() == ((-2.0, 2.0), (0.0, 22.0))
+    assert window.field_plot.scale_button.text() == "軸範囲"
     assert window.distortion_grid_plot.series
     assert "1/mm" in window.metric_labels["petzval_sum_per_mm"].text()
     window.shutdown()

@@ -50,6 +50,10 @@ Verified working:
   astigmatism, wavelength-dependent distortion, an ideal-versus-real chief-ray
   distortion grid, and the Petzval sum/radius. Stable merit metrics are stored
   for optimization.
+- Longitudinal aberration, field curvature/astigmatism, and distortion are
+  arranged side by side as a conventional field-aberration sheet. Field labels
+  and axes show both normalized field and physical image height in millimetres;
+  every graph has independent automatic or manual X/Y display ranges.
 - The main toolbar has an explicit `光学計算` button and F5 shortcut. Unchanged
   prescriptions reuse cached results instead of recalculating.
 - Element diameter and per-surface clear aperture are hard radial apertures in
@@ -137,7 +141,7 @@ Run:
 .\.venv\Scripts\python.exe -m kirakiralens
 ```
 
-The current suite has thirty-five passing tests. A Windows-rendered 1500 x 900
+The current suite has 48 passing tests. A Windows-rendered 1500 x 900
 capture is stored at `docs/images/main-window.png` and has been checked for text
 clipping and incoherent overlap.
 
