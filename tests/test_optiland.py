@@ -18,6 +18,9 @@ def test_starter_prescription_matches_initial_targets(monkeypatch, tmp_path: Pat
     assert abs(result.back_focal_length_mm - 45.46) < 0.01
     assert result.image_distance_mm == design.elements[-1].gap_after_mm
     assert abs(result.recommended_image_distance_mm - 45.46) < 0.01
+    assert result.layout_ray_model == "Optiland sequential real rays"
+    assert result.layout_ray_wavelength_um == design.settings.primary_wavelength_um
+    assert len(result.layout_rays) == design.settings.layout_ray_count * len(design.settings.field_fractions)
     rays = trace_parallel_rays(design, result.refractive_indices)
     assert len(rays) == design.settings.layout_ray_count * len(design.settings.field_fractions)
     assert all(len(ray.points) == 8 for ray in rays)
@@ -104,6 +107,8 @@ def test_single_positive_lens_focuses_parallel_rays_on_the_image(monkeypatch, tm
     assert abs(focused.paraxial_focus_distance_mm - element.gap_after_mm) < 1e-9
     assert all(abs(ray.points[-1].y_mm) < 1e-9 for ray in rays)
     assert all(ray.points[0].z_mm < 0 for ray in rays)
+    real_image_heights = [float(ray["points"][-1]["y_mm"]) for ray in focused.layout_rays]
+    assert max(real_image_heights) - min(real_image_heights) > 0.2
 
 
 def test_single_negative_lens_reports_virtual_focus_without_zeroing_image(monkeypatch, tmp_path: Path) -> None:

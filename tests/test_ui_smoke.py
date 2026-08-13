@@ -251,7 +251,7 @@ def test_single_negative_catalog_lens_keeps_image_distance_and_marks_virtual_foc
         for item in window.lens_view.scene().items()
         if isinstance(item, QGraphicsSimpleTextItem)
     }
-    assert "VIRTUAL FOCUS" in scene_text
+    assert "PARAXIAL VIRTUAL FOCUS" in scene_text
     assert "虚焦点" in window.inspector.focus.text()
     window.close()
     application.processEvents()

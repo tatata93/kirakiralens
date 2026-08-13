@@ -33,6 +33,9 @@ class FirstOrderAnalysis:
     maximum_half_field_angle_deg: float | None = None
     field_angles_deg: list[float] = field(default_factory=list)
     refractive_indices: list[float] = field(default_factory=list)
+    layout_rays: list[dict[str, Any]] = field(default_factory=list)
+    layout_ray_model: str = ""
+    layout_ray_wavelength_um: float | None = None
     warnings: list[str] = field(default_factory=list)
     error: str = ""
 
@@ -112,6 +115,12 @@ class OptilandAdapter:
             effective_focal_length = -float(system.paraxial.f1())
             angles = sensor_angle_of_view(design.settings, effective_focal_length)
             traced_fields = resolved_field_angles(design.settings)
+            layout_warning = ""
+            try:
+                layout_rays = self._trace_layout_rays(system, design, traced_fields)
+            except Exception as exc:
+                layout_rays = []
+                layout_warning = f"実光線図を作成できませんでした: {type(exc).__name__}: {exc}"
             result = FirstOrderAnalysis(
                 valid=True,
                 engine=f"Optiland {getattr(optiland, '__version__', 'unknown')}",
@@ -129,11 +138,16 @@ class OptilandAdapter:
                 maximum_half_field_angle_deg=max(traced_fields),
                 field_angles_deg=traced_fields,
                 refractive_indices=indices,
+                layout_rays=layout_rays,
+                layout_ray_model="Optiland sequential real rays" if layout_rays else "",
+                layout_ray_wavelength_um=float(design.settings.primary_wavelength_um),
             )
             if result.back_focal_length_mm is not None and result.back_focal_length_mm <= 0:
                 result.warnings.append("Back focal length is non-positive")
             if result.paraxial_focus_distance_mm is not None and result.paraxial_focus_distance_mm <= 0:
                 result.warnings.append("無限遠物体の実像焦点がありません（発散系）")
+            if layout_warning:
+                result.warnings.append(layout_warning)
             return result
         except Exception as exc:  # Optiland raises several domain-specific exception types.
             return FirstOrderAnalysis(
@@ -146,3 +160,63 @@ class OptilandAdapter:
     def _surface_comment(manufacturer: str, part_number: str, local_index: int) -> str:
         identity = " ".join(item for item in (manufacturer, part_number) if item).strip()
         return f"{identity or 'Custom'} S{local_index + 1}"
+
+    @staticmethod
+    def _trace_layout_rays(system: Any, design: OpticalDesign, field_angles: list[float]) -> list[dict[str, Any]]:
+        import optiland.backend as be
+
+        ray_count = max(int(design.settings.layout_ray_count), 1)
+        if ray_count == 1:
+            pupil = be.array([0.0])
+        else:
+            pupil = be.linspace(-0.95, 0.95, ray_count)
+        pupil_values = [float(value) for value in be.to_numpy(pupil)]
+        wavelength = float(design.settings.primary_wavelength_um)
+        entrance_span = max(10.0, min(30.0, design.elements[0].outer_diameter_mm / 2.0))
+        output: list[dict[str, Any]] = []
+
+        for field_index, (field_x, field_y) in enumerate(system.fields.get_field_coords()):
+            system.trace_generic(
+                Hx=float(field_x),
+                Hy=float(field_y),
+                Px=be.zeros_like(pupil),
+                Py=pupil,
+                wavelength=wavelength,
+            )
+            y_values = be.to_numpy(system.surface_group.y)
+            z_values = be.to_numpy(system.surface_group.z)
+            intensities = be.to_numpy(system.surface_group.intensity)
+            surface_count, traced_count = y_values.shape
+            for ray_index in range(traced_count):
+                points: list[dict[str, float]] = []
+                vignetted = False
+                for surface_index in range(surface_count):
+                    y = float(y_values[surface_index, ray_index])
+                    z = float(z_values[surface_index, ray_index])
+                    intensity = float(intensities[surface_index, ray_index])
+                    if not isfinite(y) or not isfinite(z) or intensity <= 0.0:
+                        vignetted = True
+                        break
+                    points.append({"z_mm": z, "y_mm": y})
+                if len(points) < 2:
+                    continue
+                if points[0]["z_mm"] < -entrance_span:
+                    first, second = points[0], points[1]
+                    dz = second["z_mm"] - first["z_mm"]
+                    if abs(dz) > 1e-12:
+                        start_z = -entrance_span
+                        start_y = first["y_mm"] + (second["y_mm"] - first["y_mm"]) * (
+                            start_z - first["z_mm"]
+                        ) / dz
+                        points[0] = {"z_mm": start_z, "y_mm": start_y}
+                output.append(
+                    {
+                        "field_index": field_index,
+                        "field_angle_deg": float(field_angles[field_index]),
+                        "pupil_fraction": pupil_values[ray_index],
+                        "wavelength_um": wavelength,
+                        "vignetted": vignetted,
+                        "points": points,
+                    }
+                )
+        return output

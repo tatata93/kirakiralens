@@ -3,6 +3,7 @@ from __future__ import annotations
 from kirakiralens.domain import DesignSettings, OpticalDesign
 from kirakiralens.optics.automatic_design import normalized_automatic_options, variable_candidates
 from kirakiralens.optics.configuration import resolved_field_angles, sensor_angle_of_view
+from kirakiralens.optics.signature import analysis_signature
 
 
 def test_sensor_fields_follow_sensor_diagonal_and_target_focal_length() -> None:
@@ -64,3 +65,12 @@ def test_total_track_constraint_is_normalized() -> None:
     assert options["maximum_total_track_mm"] == 80.0
     assert options["track_tolerance_mm"] == 0.25
     assert options["track_hard"] is True
+
+
+def test_layout_ray_count_invalidates_the_analysis_cache() -> None:
+    design = OpticalDesign.starter()
+    previous = analysis_signature(design)
+
+    design.settings.layout_ray_count += 2
+
+    assert analysis_signature(design) != previous

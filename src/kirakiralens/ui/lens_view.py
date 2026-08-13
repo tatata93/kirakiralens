@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
 
 from ..domain import LensElement, OpticalDesign, SurfaceSpec
 from ..optics.optiland_adapter import FirstOrderAnalysis
-from ..optics.paraxial import trace_parallel_rays
 
 
 ROLE_KIND = 0
@@ -82,13 +81,20 @@ class LensLayoutView(QGraphicsView):
         geometry, image_z = self._geometry(design)
         last_surface_z = geometry[-1][-1]
         focus_z = self._paraxial_focus_z(last_surface_z)
-        maximum_radius = max(
+        ray_min_z, ray_max_z, ray_radius = self._layout_ray_bounds()
+        image_half_height = hypot(design.settings.sensor_width_mm, design.settings.sensor_height_mm) / 2.0
+        base_radius = max(
             max(element.outer_diameter_mm / 2 for element in design.elements),
-            design.settings.sensor_height_mm / 2,
+            image_half_height,
         )
+        maximum_radius = max(base_radius, min(ray_radius, base_radius * 3.0))
         vertical_margin = max(12.0, maximum_radius * 0.8)
-        scene_left = min(-14.0, focus_z - 8.0 if focus_z is not None else -14.0)
-        scene_right = max(image_z + 24.0, focus_z + 16.0 if focus_z is not None else image_z + 24.0)
+        scene_left = min(-14.0, ray_min_z - 3.0, focus_z - 8.0 if focus_z is not None else -14.0)
+        scene_right = max(
+            image_z + 24.0,
+            ray_max_z + 12.0,
+            focus_z + 16.0 if focus_z is not None else image_z + 24.0,
+        )
         scene.setSceneRect(
             QRectF(
                 scene_left,
@@ -220,9 +226,9 @@ class LensLayoutView(QGraphicsView):
         image_pen.setCosmetic(True)
         image_item = scene.addLine(
             image_z,
-            -design.settings.sensor_height_mm / 2,
+            -image_half_height,
             image_z,
-            design.settings.sensor_height_mm / 2,
+            image_half_height,
             image_pen,
         )
         image_item.setData(ROLE_KIND, "image")
@@ -235,7 +241,7 @@ class LensLayoutView(QGraphicsView):
         image_item.setCursor(Qt.CursorShape.PointingHandCursor)
         image_item.setZValue(8)
         image_hit = QGraphicsRectItem(
-            QRectF(image_z - 1.2, -design.settings.sensor_height_mm / 2 - 1.2, 2.4, design.settings.sensor_height_mm + 2.4)
+            QRectF(image_z - 1.2, -image_half_height - 1.2, 2.4, 2 * image_half_height + 2.4)
         )
         image_hit.setPen(QPen(Qt.PenStyle.NoPen))
         image_hit.setBrush(QColor(0, 0, 0, 1))
@@ -249,7 +255,7 @@ class LensLayoutView(QGraphicsView):
         image_label = QGraphicsSimpleTextItem("IMAGE")
         image_label.setBrush(QColor("#276b62"))
         image_label.setScale(0.2)
-        image_label.setPos(image_z - 2.0, -design.settings.sensor_height_mm / 2 - 4.5)
+        image_label.setPos(image_z - 2.0, -image_half_height - 4.5)
         image_label.setData(ROLE_KIND, "image")
         image_label.setData(ROLE_ELEMENT, -1)
         image_label.setData(ROLE_SURFACE, -1)
@@ -279,42 +285,53 @@ class LensLayoutView(QGraphicsView):
             status = "光線解析待ち" if self._analysis.error == "解析待ち" else "光線解析失敗"
             self._draw_ray_status(status, error=status == "光線解析失敗")
             return
-        ray_colors = ["#b3423f", "#276b62", "#386fa4", "#7a4d8b", "#d28b19"]
-        rays = trace_parallel_rays(design, self._analysis.refractive_indices)
+        ray_colors = ["#c93f3f", "#2a8f55", "#356fc3", "#c044b5", "#d18a22"]
+        rays = self._analysis.layout_rays
         if not rays:
-            self._draw_ray_status("光線データなし", error=True)
+            self._draw_ray_status("実光線データなし", error=True)
             return
         for ray in rays:
-            if len(ray.points) < 2:
+            points = ray.get("points", [])
+            if len(points) < 2:
                 continue
-            path = QPainterPath(QPointF(ray.points[0].z_mm, ray.points[0].y_mm))
-            for point in ray.points[1:]:
-                path.lineTo(point.z_mm, point.y_mm)
+            path = QPainterPath(QPointF(float(points[0]["z_mm"]), float(points[0]["y_mm"])))
+            for point in points[1:]:
+                path.lineTo(float(point["z_mm"]), float(point["y_mm"]))
             item = QGraphicsPathItem(path)
-            pen = QPen(QColor(ray_colors[ray.field_index % len(ray_colors)]), 0)
+            field_index = int(ray.get("field_index", 0))
+            pen = QPen(QColor(ray_colors[field_index % len(ray_colors)]), 0)
             pen.setCosmetic(True)
             pen.setColor(QColor(pen.color().red(), pen.color().green(), pen.color().blue(), 155))
             item.setPen(pen)
+            item.setToolTip(
+                f"逐次実光線 / 画角 {float(ray.get('field_angle_deg', 0.0)):.3f}° / "
+                f"瞳 {float(ray.get('pupil_fraction', 0.0)):+.2f} / "
+                f"波長 {float(ray.get('wavelength_um', 0.0)) * 1000.0:.1f} nm"
+            )
             item.setZValue(3)
             self.scene().addItem(item)
 
-            if focus_z is None or ray.field_index != 0 or len(ray.points) < 3:
+            if focus_z is None or field_index != 0 or len(points) < 3:
                 continue
-            previous = ray.points[-2]
-            image = ray.points[-1]
-            dz = image.z_mm - previous.z_mm
+            previous = points[-2]
+            image = points[-1]
+            previous_z = float(previous["z_mm"])
+            previous_y = float(previous["y_mm"])
+            image_point_z = float(image["z_mm"])
+            image_y = float(image["y_mm"])
+            dz = image_point_z - previous_z
             if abs(dz) < 1e-12:
                 continue
             if focus_z < last_surface_z - 1e-6:
-                guide_start = previous
+                guide_start_z, guide_start_y = previous_z, previous_y
             elif focus_z > image_z + 1e-6:
-                guide_start = image
+                guide_start_z, guide_start_y = image_point_z, image_y
             else:
                 continue
-            focus_y = previous.y_mm + (image.y_mm - previous.y_mm) * (focus_z - previous.z_mm) / dz
+            focus_y = previous_y + (image_y - previous_y) * (focus_z - previous_z) / dz
             guide = self.scene().addLine(
-                guide_start.z_mm,
-                guide_start.y_mm,
+                guide_start_z,
+                guide_start_y,
                 focus_z,
                 focus_y,
                 QPen(QColor(178, 117, 34, 145), 0, Qt.PenStyle.DashLine),
@@ -342,7 +359,7 @@ class LensLayoutView(QGraphicsView):
             f"{self._analysis.paraxial_focus_distance_mm:.3f} mm"
         )
         marker.setZValue(2)
-        label = QGraphicsSimpleTextItem("VIRTUAL FOCUS" if virtual else "FOCUS")
+        label = QGraphicsSimpleTextItem("PARAXIAL VIRTUAL FOCUS" if virtual else "PARAXIAL FOCUS")
         label.setBrush(color)
         label.setScale(0.18)
         label.setPos(focus_z + 0.8, maximum_radius + 2.5)
@@ -358,6 +375,22 @@ class LensLayoutView(QGraphicsView):
         label.setPos(bounds.left() + 3, bounds.top() + 3)
         label.setZValue(10)
         self.scene().addItem(label)
+
+    def _layout_ray_bounds(self) -> tuple[float, float, float]:
+        if self._analysis is None or not self._analysis.layout_rays:
+            return -14.0, 0.0, 0.0
+        z_values: list[float] = []
+        y_values: list[float] = []
+        for ray in self._analysis.layout_rays:
+            for point in ray.get("points", []):
+                z = float(point.get("z_mm", 0.0))
+                y = float(point.get("y_mm", 0.0))
+                if isfinite(z) and isfinite(y):
+                    z_values.append(z)
+                    y_values.append(abs(y))
+        if not z_values:
+            return -14.0, 0.0, 0.0
+        return min(z_values), max(z_values), max(y_values, default=0.0)
 
     def _draw_back_focus_dimension(self, design: OpticalDesign, start: float, end: float, y: float) -> None:
         pen = QPen(QColor("#59625f"), 0)

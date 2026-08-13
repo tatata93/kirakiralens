@@ -33,6 +33,7 @@ def analysis_signature(design: OpticalDesign, options: dict[str, Any] | None = N
             "field_mode": settings.field_mode,
             "field_fractions": settings.field_fractions,
             "field_angles_deg": settings.field_angles_deg,
+            "layout_ray_count": settings.layout_ray_count,
         },
         "stop_after_element": design.stop_after_element,
         "stop_surface_index": design.stop_surface_index,
