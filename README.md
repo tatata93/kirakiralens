@@ -28,6 +28,8 @@ The current milestone includes:
 - free-topology catalog search over component insertion/deletion, order,
   orientation, and aperture-stop surface with configurable component-count
   limits;
+- a step-based automatic-design UI with image-quality presets and an editable
+  real-ray longitudinal-aberration RMS objective/upper limit;
 - a complete editable surface table covering every lens surface, object, image
   size, apertures, aspheres, stop assignment, and optimization locks.
 
@@ -36,6 +38,8 @@ The current milestone includes:
 ![KiraKiraLens performance window](docs/images/performance-window.png)
 
 ![KiraKiraLens distortion grid](docs/images/distortion-grid.png)
+
+![KiraKiraLens automatic design](docs/images/automatic-design.png)
 
 ## Setup
 

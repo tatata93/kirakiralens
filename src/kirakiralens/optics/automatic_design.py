@@ -10,6 +10,7 @@ import numpy as np
 
 from ..domain import OpticalDesign
 from .configuration import resolved_field_weights
+from .longitudinal import longitudinal_aberration_metrics
 from .optiland_adapter import OptilandAdapter
 
 
@@ -35,6 +36,9 @@ DEFAULT_AUTOMATIC_OPTIONS: dict[str, Any] = {
     "efl_weight": 3.0,
     "bfl_weight": 2.0,
     "spot_weight": 10.0,
+    "longitudinal_weight": 2.0,
+    "longitudinal_tolerance_um": 100.0,
+    "longitudinal_hard": False,
     "distortion_weight": 1.0,
     "track_weight": 1.0,
     "spot_rings": 5,
@@ -91,6 +95,10 @@ def normalized_automatic_options(options: dict[str, Any] | None = None) -> dict[
         else max(float(result["maximum_total_track_mm"]), 0.1)
     )
     result["track_tolerance_mm"] = max(float(result["track_tolerance_mm"]), 1e-3)
+    result["longitudinal_tolerance_um"] = min(
+        max(float(result["longitudinal_tolerance_um"]), 0.1),
+        100000.0,
+    )
     if result["bfl_constraint"] not in {"off", "target", "minimum", "range"}:
         result["bfl_constraint"] = "target"
     result["discrete_evaluations"] = min(max(int(result["discrete_evaluations"]), 1), 100000)
@@ -104,7 +112,14 @@ def normalized_automatic_options(options: dict[str, Any] | None = None) -> dict[
     )
     if result["classic_form"] not in {"", "triplet", "tessar", "double_gauss"}:
         result["classic_form"] = ""
-    for key in ("efl_weight", "bfl_weight", "spot_weight", "distortion_weight", "track_weight"):
+    for key in (
+        "efl_weight",
+        "bfl_weight",
+        "spot_weight",
+        "longitudinal_weight",
+        "distortion_weight",
+        "track_weight",
+    ):
         result[key] = min(max(float(result[key]), 0.0), 1000.0)
     for key in (
         "vary_radii",
@@ -114,6 +129,7 @@ def normalized_automatic_options(options: dict[str, Any] | None = None) -> dict[
         "efl_hard",
         "bfl_hard",
         "track_hard",
+        "longitudinal_hard",
         "discrete_search",
         "allow_orientation_search",
         "allow_order_search",
@@ -268,7 +284,7 @@ def run_automatic_design(
         if not discrete_result.get("constraints_satisfied", True):
             return {
                 "valid": False,
-                "error": "必須にした焦点距離、バックフォーカス、または全長条件を満たす構成が見つかりませんでした",
+                "error": "必須にした焦点距離、バックフォーカス、全長、または縦収差条件を満たす構成が見つかりませんでした",
                 "evaluations": discrete_result.get("evaluations", 0),
                 "best_score": discrete_result.get("best_score"),
                 "metrics": discrete_result.get("metrics", {}),
@@ -388,6 +404,12 @@ def run_automatic_design(
             score += _back_focus_penalty(image_distance, resolved)
             total_track = _current_total_track(system)
             score += _track_penalty(total_track, resolved)
+            longitudinal = None
+            if resolved["longitudinal_weight"] > 0 or resolved["longitudinal_hard"]:
+                longitudinal = _longitudinal_metrics(system, design)
+                score += resolved["longitudinal_weight"] * (
+                    longitudinal["rms_um"] / resolved["longitudinal_tolerance_um"]
+                ) ** 2
             efl = float(system.paraxial.f2())
             if resolved["efl_hard"] and abs(efl - target_efl) > resolved["efl_tolerance_mm"]:
                 score += 1e6 * ((abs(efl - target_efl) / resolved["efl_tolerance_mm"]) ** 2)
@@ -395,6 +417,11 @@ def run_automatic_design(
                 score += 1e6 * max(_back_focus_violation(image_distance, resolved), 1.0) ** 2
             if resolved["track_hard"] and not _track_satisfied(total_track, resolved):
                 score += 1e6 * max(_track_violation(total_track, resolved), 1.0) ** 2
+            if resolved["longitudinal_hard"] and not _longitudinal_satisfied(longitudinal or {}, resolved):
+                score += 1e6 * max(
+                    longitudinal["rms_um"] / resolved["longitudinal_tolerance_um"],
+                    1.0,
+                ) ** 2
             if not np.isfinite(score):
                 score = 1e30
         except Exception:
@@ -466,8 +493,16 @@ def run_automatic_design(
         (not resolved["efl_hard"] or abs(float(system.paraxial.f2()) - target_efl) <= resolved["efl_tolerance_mm"])
         and (not resolved["bfl_hard"] or _back_focus_satisfied(design.elements[-1].gap_after_mm, resolved))
         and (not resolved["track_hard"] or _track_satisfied(_current_total_track(system), resolved))
+        and (not resolved["longitudinal_hard"] or _longitudinal_satisfied(metrics, resolved))
     )
-    ranked_candidates = _optimized_candidate_list(discrete_result, design, best_score, metrics, resolved)
+    ranked_candidates = _optimized_candidate_list(
+        discrete_result,
+        design,
+        best_score,
+        metrics,
+        resolved,
+        constraints_satisfied,
+    )
     return {
         "valid": np.isfinite(best_score) and best_score < 1e29 and constraints_satisfied,
         "constraints_satisfied": constraints_satisfied,
@@ -507,6 +542,7 @@ def _target_summary(options: dict[str, Any]) -> dict[str, Any]:
         "minimum_bfl_mm": options["minimum_bfl_mm"],
         "maximum_bfl_mm": options["maximum_bfl_mm"],
         "maximum_total_track_mm": options["maximum_total_track_mm"],
+        "longitudinal_tolerance_um": options["longitudinal_tolerance_um"],
     }
 
 
@@ -530,6 +566,7 @@ def _optimized_candidate_list(
     score: float,
     metrics: dict[str, float | None],
     options: dict[str, Any],
+    constraints_satisfied: bool,
 ) -> list[dict[str, Any]]:
     if discrete_result is None:
         return []
@@ -541,7 +578,7 @@ def _optimized_candidate_list(
         "design": design.to_dict(),
         "metrics": metrics,
         "topology": discrete_result.get("topology"),
-        "constraints_satisfied": True,
+        "constraints_satisfied": constraints_satisfied,
         "parts": _parts_summary(design),
     }
     result = [optimized, *candidates[1: options["result_count"]]]
@@ -614,6 +651,22 @@ def _track_satisfied(total_track_mm: float, options: dict[str, Any]) -> bool:
     return maximum is None or total_track_mm <= maximum
 
 
+def _longitudinal_metrics(system, design: OpticalDesign) -> dict[str, float]:
+    return longitudinal_aberration_metrics(
+        system,
+        design.settings.wavelengths_um,
+        design.settings.wavelength_weights,
+        design.settings.primary_wavelength_um,
+    )
+
+
+def _longitudinal_satisfied(metrics: dict[str, float | None], options: dict[str, Any]) -> bool:
+    value = metrics.get("longitudinal_rms_um")
+    if value is None:
+        value = metrics.get("rms_um")
+    return value is not None and float(value) <= options["longitudinal_tolerance_um"]
+
+
 def _current_image_distance(design, candidates, problem) -> float:
     for candidate, variable in zip(candidates, problem.variables, strict=True):
         if candidate.kind == "image_gap":
@@ -653,6 +706,7 @@ def _final_metrics(system, problem, spot_operand_indices, design) -> dict[str, f
             pass
     edge_distortion = None
     mtf40_min = None
+    longitudinal: dict[str, float] = {}
     try:
         from optiland.analysis import Distortion
 
@@ -671,6 +725,10 @@ def _final_metrics(system, problem, spot_operand_indices, design) -> dict[str, f
         mtf40_min = minimum_polychromatic_mtf(system, design, 40.0, 3)
     except Exception:
         pass
+    try:
+        longitudinal = _longitudinal_metrics(system, design)
+    except Exception:
+        pass
     total_track = sum(
         element.gap_after_mm + sum(surface.thickness_after_mm for surface in element.surfaces[:-1])
         for element in design.elements
@@ -682,6 +740,10 @@ def _final_metrics(system, problem, spot_operand_indices, design) -> dict[str, f
         "maximum_rms_spot_um": max(spot_values, default=None),
         "mtf40_min": mtf40_min,
         "edge_distortion_percent": edge_distortion,
+        "longitudinal_rms_um": longitudinal.get("rms_um"),
+        "maximum_longitudinal_aberration_um": longitudinal.get("maximum_abs_um"),
+        "primary_longitudinal_spherical_um": longitudinal.get("primary_lsa_um"),
+        "axial_color_um": longitudinal.get("axial_color_um"),
         "total_track_mm": total_track,
         "maximum_outer_diameter_mm": max((element.outer_diameter_mm for element in design.elements), default=None),
         "diffraction_airy_radius_um": 1.22

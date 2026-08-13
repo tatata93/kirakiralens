@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
-    QFormLayout,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -48,13 +47,14 @@ class AutomaticDesignWindow(QMainWindow):
         self.candidate_payloads: list[dict] = []
         self._generation = 0
         self._running = False
+        self._applying_merit_preset = False
         self._controller = AutomaticDesignController(repository_root / ".tmp" / "matplotlib", self)
         self._controller.progress.connect(self._progress)
         self._controller.finished.connect(self._finished)
         self._controller.runningChanged.connect(self._running_changed)
         self.setWindowTitle("自動設計 - KiraKiraLens")
-        self.resize(900, 800)
-        self.setMinimumSize(780, 700)
+        self.resize(1050, 820)
+        self.setMinimumSize(900, 700)
         self._build_ui()
         self._refresh_variable_count()
 
@@ -65,15 +65,15 @@ class AutomaticDesignWindow(QMainWindow):
         layout = QVBoxLayout(settings_page)
         layout.setContentsMargins(12, 10, 12, 12)
 
-        setup = QGroupBox("探索")
+        setup = QGroupBox("探索方法")
         setup_layout = QGridLayout(setup)
         self.method = QComboBox()
-        self.method.addItem("局所探索", "local")
-        self.method.addItem("大域探索", "global")
+        self.method.addItem("局所（速い）", "local")
+        self.method.addItem("大域（広く探索）", "global")
         self.search_scope = QComboBox()
-        self.search_scope.addItem("現在の構成を連続最適化", "continuous")
-        self.search_scope.addItem("現在の枚数で市販レンズを自由探索", "discrete")
-        self.search_scope.addItem("枚数・順序・絞り位置を自由探索", "topology")
+        self.search_scope.addItem("今の構成を調整", "continuous")
+        self.search_scope.addItem("今の部品数で市販レンズを交換", "discrete")
+        self.search_scope.addItem("部品数も含めて自由探索", "topology")
         self.search_scope.addItem("古典型から市販レンズを探索", "classic")
         self.time_limit = QSpinBox()
         self.time_limit.setRange(1, 86400)
@@ -83,19 +83,19 @@ class AutomaticDesignWindow(QMainWindow):
         self.max_evaluations.setRange(10, 1000000)
         self.max_evaluations.setValue(500)
         self.variable_count = QLabel("-")
-        setup_layout.addWidget(QLabel("探索対象"), 0, 0)
+        setup_layout.addWidget(QLabel("探索モード"), 0, 0)
         setup_layout.addWidget(self.search_scope, 0, 1, 1, 3)
-        setup_layout.addWidget(QLabel("連続探索方式"), 1, 0)
+        setup_layout.addWidget(QLabel("仕上げ方式"), 1, 0)
         setup_layout.addWidget(self.method, 1, 1)
-        setup_layout.addWidget(QLabel("時間上限"), 1, 2)
+        setup_layout.addWidget(QLabel("最大時間"), 1, 2)
         setup_layout.addWidget(self.time_limit, 1, 3)
-        setup_layout.addWidget(QLabel("連続評価回数"), 2, 0)
+        setup_layout.addWidget(QLabel("最大計算回数"), 2, 0)
         setup_layout.addWidget(self.max_evaluations, 2, 1)
-        setup_layout.addWidget(QLabel("可変数"), 2, 2)
+        setup_layout.addWidget(QLabel("変更可能な値"), 2, 2)
         setup_layout.addWidget(self.variable_count, 2, 3)
         layout.addWidget(setup)
 
-        target_group = QGroupBox("数値目標")
+        target_group = QGroupBox("必要な仕様")
         target_grid = QGridLayout(target_group)
         self.target_efl = self._value_spin(0.1, 2000.0, self.design.settings.focal_length_target_mm, " mm")
         self.efl_tolerance = self._value_spin(0.001, 100.0, 0.5, " mm", 3)
@@ -115,31 +115,38 @@ class AutomaticDesignWindow(QMainWindow):
         self.maximum_total_track = self._value_spin(0.1, 5000.0, 120.0, " mm")
         self.track_hard = QCheckBox("必須")
         self.track_hard.setChecked(True)
-        target_grid.addWidget(QLabel("焦点距離"), 0, 0)
+        target_grid.addWidget(QLabel("焦点距離 EFL"), 0, 0)
         target_grid.addWidget(self.target_efl, 0, 1)
         target_grid.addWidget(QLabel("許容差"), 0, 2)
         target_grid.addWidget(self.efl_tolerance, 0, 3)
         target_grid.addWidget(self.efl_hard, 0, 4)
-        target_grid.addWidget(QLabel("F値"), 1, 0)
+        target_grid.addWidget(QLabel("目標F値"), 1, 0)
         target_grid.addWidget(self.target_f_number, 1, 1)
-        target_grid.addWidget(QLabel("BFL"), 2, 0)
+        target_grid.addWidget(QLabel("バックフォーカス条件"), 2, 0)
         target_grid.addWidget(self.bfl_constraint, 2, 1)
-        target_grid.addWidget(self.target_bfl, 2, 2)
-        target_grid.addWidget(self.minimum_bfl, 2, 2)
-        target_grid.addWidget(self.maximum_bfl, 2, 3)
-        target_grid.addWidget(self.bfl_tolerance, 2, 3)
+        self.target_bfl_label = QLabel("目標BFL")
+        self.minimum_bfl_label = QLabel("最小BFL")
+        self.maximum_bfl_label = QLabel("最大BFL")
+        self.bfl_tolerance_label = QLabel("BFL許容差")
+        target_grid.addWidget(self.target_bfl_label, 3, 0)
+        target_grid.addWidget(self.target_bfl, 3, 1)
+        target_grid.addWidget(self.minimum_bfl_label, 4, 0)
+        target_grid.addWidget(self.minimum_bfl, 4, 1)
+        target_grid.addWidget(self.maximum_bfl_label, 5, 0)
+        target_grid.addWidget(self.maximum_bfl, 5, 1)
+        target_grid.addWidget(self.bfl_tolerance_label, 6, 0)
+        target_grid.addWidget(self.bfl_tolerance, 6, 1)
         target_grid.addWidget(self.bfl_hard, 2, 4)
-        target_grid.addWidget(self.track_limit_enabled, 3, 0)
-        target_grid.addWidget(self.maximum_total_track, 3, 1)
-        target_grid.addWidget(self.track_hard, 3, 4)
+        target_grid.addWidget(self.track_limit_enabled, 7, 0)
+        target_grid.addWidget(self.maximum_total_track, 7, 1)
+        target_grid.addWidget(self.track_hard, 7, 4)
         self.track_limit_enabled.toggled.connect(self.maximum_total_track.setEnabled)
         self.track_limit_enabled.toggled.connect(self.track_hard.setEnabled)
         self.maximum_total_track.setEnabled(False)
         self.track_hard.setEnabled(False)
         self.bfl_constraint.currentIndexChanged.connect(self._update_bfl_controls)
-        layout.addWidget(target_group)
 
-        self.discrete_group = QGroupBox("市販レンズ探索")
+        self.discrete_group = QGroupBox("市販レンズと構成の探索")
         discrete_grid = QGridLayout(self.discrete_group)
         self.discrete_evaluations = QSpinBox()
         self.discrete_evaluations.setRange(1, 100000)
@@ -175,9 +182,9 @@ class AutomaticDesignWindow(QMainWindow):
         self.maximum_elements.setValue(min(20, max(len(self.design.elements) + 2, 4)))
         self.minimum_elements.valueChanged.connect(self.maximum_elements.setMinimum)
         self.maximum_elements.valueChanged.connect(self.minimum_elements.setMaximum)
-        discrete_grid.addWidget(QLabel("離散評価回数"), 0, 0)
+        discrete_grid.addWidget(QLabel("構成候補の評価回数"), 0, 0)
         discrete_grid.addWidget(self.discrete_evaluations, 0, 1)
-        discrete_grid.addWidget(QLabel("各位置の候補数"), 0, 2)
+        discrete_grid.addWidget(QLabel("各位置の部品候補数"), 0, 2)
         discrete_grid.addWidget(self.candidates_per_slot, 0, 3)
         discrete_grid.addWidget(QLabel("メーカー"), 1, 0)
         discrete_grid.addWidget(self.manufacturer, 1, 1)
@@ -194,10 +201,9 @@ class AutomaticDesignWindow(QMainWindow):
         discrete_grid.addWidget(self.minimum_elements, 4, 1)
         discrete_grid.addWidget(QLabel("～"), 4, 2)
         discrete_grid.addWidget(self.maximum_elements, 4, 3)
-        layout.addWidget(self.discrete_group)
         self.search_scope.currentIndexChanged.connect(self._search_scope_changed)
 
-        variable_group = QGroupBox("動かす項目")
+        variable_group = QGroupBox("連続最適化で変更する値")
         variable_layout = QHBoxLayout(variable_group)
         self.vary_radii = QCheckBox("曲率半径")
         self.vary_radii.setChecked(True)
@@ -210,21 +216,73 @@ class AutomaticDesignWindow(QMainWindow):
             variable_layout.addWidget(widget)
             widget.toggled.connect(self._refresh_variable_count)
         variable_layout.addStretch(1)
-        layout.addWidget(variable_group)
-
-        merit_group = QGroupBox("評価の優先度")
-        merit_form = QFormLayout(merit_group)
+        merit_group = QGroupBox("性能の配分")
+        merit_grid = QGridLayout(merit_group)
         self.efl_weight = self._weight_spin(3.0)
         self.bfl_weight = self._weight_spin(2.0)
         self.spot_weight = self._weight_spin(10.0)
+        self.longitudinal_weight = self._weight_spin(2.0)
+        self.longitudinal_tolerance = self._value_spin(0.1, 100000.0, 100.0, " µm", 1)
+        self.longitudinal_hard = QCheckBox("超過案を除外")
         self.distortion_weight = self._weight_spin(1.0)
         self.track_weight = self._weight_spin(1.0)
-        merit_form.addRow("焦点距離", self.efl_weight)
-        merit_form.addRow("像面位置", self.bfl_weight)
-        merit_form.addRow("多視野・多波長RMSスポット", self.spot_weight)
-        merit_form.addRow("歪曲", self.distortion_weight)
-        merit_form.addRow("全長超過", self.track_weight)
-        layout.addWidget(merit_group)
+        self.merit_preset = QComboBox()
+        self.merit_preset.addItem("バランス", "balanced")
+        self.merit_preset.addItem("解像重視", "resolution")
+        self.merit_preset.addItem("縦収差重視", "longitudinal")
+        self.merit_preset.addItem("歪曲重視", "distortion")
+        self.merit_preset.addItem("カスタム", "custom")
+        self.merit_preset.currentIndexChanged.connect(self._apply_merit_preset)
+        for widget in (
+            self.efl_weight,
+            self.bfl_weight,
+            self.spot_weight,
+            self.longitudinal_weight,
+            self.distortion_weight,
+            self.track_weight,
+            self.longitudinal_tolerance,
+        ):
+            widget.valueChanged.connect(self._mark_custom_merit)
+        merit_grid.addWidget(QLabel("評価プリセット"), 0, 0)
+        merit_grid.addWidget(self.merit_preset, 0, 1, 1, 2)
+        merit_grid.addWidget(QLabel("評価項目"), 1, 0)
+        merit_grid.addWidget(QLabel("相対重み（0で無視）"), 1, 1)
+        merit_grid.addWidget(QLabel("目標・許容値"), 1, 2)
+        merit_grid.addWidget(QLabel("必須条件"), 1, 3)
+        merit_grid.addWidget(QLabel("焦点距離"), 2, 0)
+        merit_grid.addWidget(self.efl_weight, 2, 1)
+        merit_grid.addWidget(QLabel("バックフォーカス"), 3, 0)
+        merit_grid.addWidget(self.bfl_weight, 3, 1)
+        merit_grid.addWidget(QLabel("多視野・多波長RMSスポット"), 4, 0)
+        merit_grid.addWidget(self.spot_weight, 4, 1)
+        merit_grid.addWidget(QLabel("縦収差RMS（軸上・全波長）"), 5, 0)
+        merit_grid.addWidget(self.longitudinal_weight, 5, 1)
+        merit_grid.addWidget(self.longitudinal_tolerance, 5, 2)
+        merit_grid.addWidget(self.longitudinal_hard, 5, 3)
+        merit_grid.addWidget(QLabel("歪曲"), 6, 0)
+        merit_grid.addWidget(self.distortion_weight, 6, 1)
+        merit_grid.addWidget(QLabel("全長超過"), 7, 0)
+        merit_grid.addWidget(self.track_weight, 7, 1)
+        self.longitudinal_tolerance.setToolTip("縦収差図の焦点ずれをRMS化した許容値")
+
+        self.configuration_tabs = QTabWidget()
+        goal_page = QWidget()
+        goal_layout = QVBoxLayout(goal_page)
+        goal_layout.addWidget(target_group)
+        goal_layout.addStretch(1)
+        search_page = QWidget()
+        search_layout = QVBoxLayout(search_page)
+        search_layout.addWidget(self.discrete_group)
+        search_layout.addWidget(variable_group)
+        search_layout.addStretch(1)
+        quality_page = QWidget()
+        quality_layout = QVBoxLayout(quality_page)
+        quality_layout.addWidget(merit_group)
+        quality_layout.addStretch(1)
+        self.configuration_tabs.addTab(goal_page, "1  設計目標")
+        self.configuration_tabs.addTab(search_page, "2  変更範囲")
+        self.configuration_tabs.addTab(quality_page, "3  画質目標")
+        layout.addWidget(self.configuration_tabs, 1)
 
         controls = QHBoxLayout()
         self.start_button = QPushButton(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay), "開始")
@@ -253,9 +311,12 @@ class AutomaticDesignWindow(QMainWindow):
         self.result_table.horizontalHeader().setStretchLastSection(True)
         self.result_table.verticalHeader().hide()
         self.result_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        layout.addWidget(self.result_table, 1)
-        central.addTab(settings_page, "探索設定")
+        result_page = QWidget()
+        result_layout = QVBoxLayout(result_page)
+        result_layout.addWidget(self.result_table)
+        central.addTab(settings_page, "自動設計")
         central.addTab(self._build_candidate_page(), "候補比較")
+        central.addTab(result_page, "結果概要")
         self.setCentralWidget(central)
         self._update_bfl_controls()
         self._search_scope_changed()
@@ -266,9 +327,12 @@ class AutomaticDesignWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         splitter = QSplitter(Qt.Orientation.Vertical)
 
-        self.candidate_table = QTableWidget(0, 12)
+        self.candidate_table = QTableWidget(0, 13)
         self.candidate_table.setHorizontalHeaderLabels(
-            ["順位", "段階", "型", "制約", "スコア", "EFL", "F値", "BFL", "RMS", "MTF40", "歪曲", "全長"]
+            [
+                "順位", "段階", "型", "制約", "スコア", "EFL", "F値", "BFL",
+                "スポットRMS", "縦収差RMS", "MTF40", "歪曲", "全長",
+            ]
         )
         self.candidate_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.candidate_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -327,6 +391,39 @@ class AutomaticDesignWindow(QMainWindow):
         spin.setKeyboardTracking(False)
         return spin
 
+    def _apply_merit_preset(self, _index: int | None = None) -> None:
+        presets = {
+            "balanced": (3.0, 2.0, 10.0, 2.0, 1.0, 1.0, 100.0),
+            "resolution": (3.0, 2.0, 16.0, 3.0, 1.0, 1.0, 100.0),
+            "longitudinal": (3.0, 2.0, 8.0, 12.0, 1.0, 1.0, 50.0),
+            "distortion": (3.0, 2.0, 7.0, 2.0, 10.0, 1.0, 100.0),
+        }
+        values = presets.get(str(self.merit_preset.currentData()))
+        if values is None:
+            return
+        widgets = (
+            self.efl_weight,
+            self.bfl_weight,
+            self.spot_weight,
+            self.longitudinal_weight,
+            self.distortion_weight,
+            self.track_weight,
+            self.longitudinal_tolerance,
+        )
+        self._applying_merit_preset = True
+        try:
+            for widget, value in zip(widgets, values, strict=True):
+                widget.setValue(value)
+        finally:
+            self._applying_merit_preset = False
+
+    def _mark_custom_merit(self, _value: float | None = None) -> None:
+        if self._applying_merit_preset:
+            return
+        custom_index = self.merit_preset.findData("custom")
+        if custom_index >= 0:
+            self.merit_preset.setCurrentIndex(custom_index)
+
     def set_design(self, design: OpticalDesign) -> None:
         if self._running:
             return
@@ -361,6 +458,9 @@ class AutomaticDesignWindow(QMainWindow):
                 "efl_weight": self.efl_weight.value(),
                 "bfl_weight": self.bfl_weight.value(),
                 "spot_weight": self.spot_weight.value(),
+                "longitudinal_weight": self.longitudinal_weight.value(),
+                "longitudinal_tolerance_um": self.longitudinal_tolerance.value(),
+                "longitudinal_hard": self.longitudinal_hard.isChecked(),
                 "distortion_weight": self.distortion_weight.value(),
                 "track_weight": self.track_weight.value(),
                 "target_efl_mm": self.target_efl.value(),
@@ -391,9 +491,13 @@ class AutomaticDesignWindow(QMainWindow):
 
     def _update_bfl_controls(self) -> None:
         mode = self.bfl_constraint.currentData()
+        self.target_bfl_label.setVisible(mode == "target")
         self.target_bfl.setVisible(mode == "target")
+        self.minimum_bfl_label.setVisible(mode in {"minimum", "range"})
         self.minimum_bfl.setVisible(mode in {"minimum", "range"})
+        self.maximum_bfl_label.setVisible(mode == "range")
         self.maximum_bfl.setVisible(mode == "range")
+        self.bfl_tolerance_label.setVisible(mode == "target")
         self.bfl_tolerance.setVisible(mode == "target")
         self.bfl_hard.setEnabled(mode != "off")
 
@@ -619,6 +723,14 @@ class AutomaticDesignWindow(QMainWindow):
             ("F値", self.design.settings.f_number_target, targets.get("f_number"), metrics.get("image_f_number")),
             ("像面位置 [mm]", self.design.elements[-1].gap_after_mm, bfl_target, metrics.get("image_distance_mm")),
             ("最大RMSスポット [µm]", None, None, metrics.get("maximum_rms_spot_um")),
+            (
+                "縦収差RMS [µm]",
+                None,
+                f"<= {targets.get('longitudinal_tolerance_um', 0):.6g}",
+                metrics.get("longitudinal_rms_um"),
+            ),
+            ("最大縦収差 [µm]", None, None, metrics.get("maximum_longitudinal_aberration_um")),
+            ("軸上色収差 [µm]", None, None, metrics.get("axial_color_um")),
             ("全長 [mm]", None, track_target, metrics.get("total_track_mm")),
             ("Airy半径 [µm]", None, None, metrics.get("diffraction_airy_radius_um")),
         ]
@@ -666,6 +778,7 @@ class AutomaticDesignWindow(QMainWindow):
                 metrics.get("image_f_number"),
                 metrics.get("image_distance_mm"),
                 metrics.get("maximum_rms_spot_um"),
+                metrics.get("longitudinal_rms_um"),
                 metrics.get("mtf40_min"),
                 metrics.get("edge_distortion_percent"),
                 metrics.get("total_track_mm"),
@@ -695,6 +808,7 @@ class AutomaticDesignWindow(QMainWindow):
             f"候補 {current_row + 1} / {len(self.candidate_payloads)}  {form_name}  {stage}  "
             f"EFL {self._display_value(metrics.get('effective_focal_length_mm'))} mm  "
             f"BFL {self._display_value(metrics.get('image_distance_mm'))} mm  "
+            f"縦収差RMS {self._display_value(metrics.get('longitudinal_rms_um'))} µm  "
             f"MTF40 {self._display_value(metrics.get('mtf40_min'))}"
         )
         parts = candidate.get("parts") or self._parts_from_design(design)

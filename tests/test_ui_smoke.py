@@ -374,6 +374,15 @@ def test_topology_search_builds_mixed_power_catalog_pool() -> None:
     assert options["allow_stop_search"] is True
     assert options["minimum_element_count"] == 2
     assert options["maximum_element_count"] == 5
+    assert options["longitudinal_weight"] == 2.0
+    assert options["longitudinal_tolerance_um"] == 100.0
+    assert window.configuration_tabs.count() == 3
+    window.merit_preset.setCurrentIndex(window.merit_preset.findData("longitudinal"))
+    assert window.longitudinal_weight.value() == 12.0
+    assert window.longitudinal_tolerance.value() == 50.0
+    assert window.merit_preset.currentData() == "longitudinal"
+    window.longitudinal_weight.setValue(11.0)
+    assert window.merit_preset.currentData() == "custom"
     powers = {window._element_power(lens_element_from_dict(item)) for item in pool}
     assert len(pool) >= 2
     assert powers == {"positive", "negative"}

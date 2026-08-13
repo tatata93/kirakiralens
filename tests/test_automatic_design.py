@@ -7,6 +7,8 @@ from random import Random
 from kirakiralens.domain import OpticalDesign
 from kirakiralens.optics.automatic_design import normalized_automatic_options, run_automatic_design
 from kirakiralens.optics.discrete_search import _delete_element, _insert_catalog_element, _mutate
+from kirakiralens.optics.longitudinal import longitudinal_aberration_metrics
+from kirakiralens.optics.optiland_adapter import OptilandAdapter
 
 
 def test_discrete_design_accepts_numeric_f_number_and_minimum_bfl() -> None:
@@ -30,6 +32,9 @@ def test_discrete_design_accepts_numeric_f_number_and_minimum_bfl() -> None:
             "minimum_bfl_mm": 40.0,
             "bfl_hard": True,
             "spot_rings": 2,
+            "longitudinal_weight": 4.0,
+            "longitudinal_tolerance_um": 2000.0,
+            "longitudinal_hard": True,
             "time_limit_seconds": 10,
         },
     )
@@ -44,6 +49,8 @@ def test_discrete_design_accepts_numeric_f_number_and_minimum_bfl() -> None:
     assert len(result["candidates"]) == 1
     assert result["candidates"][0]["parts"][0]["position"] == 1
     assert 0.0 <= result["candidates"][0]["metrics"]["mtf40_min"] <= 1.0
+    assert 0.0 < result["metrics"]["longitudinal_rms_um"] < 2000.0
+    assert result["targets"]["longitudinal_tolerance_um"] == 2000.0
     assert "candidate_pool" not in result["options"]
     json.dumps(result, allow_nan=False)
 
@@ -112,3 +119,51 @@ def test_topology_options_are_normalized() -> None:
     assert options["allow_stop_search"] is True
     assert options["minimum_element_count"] == 5
     assert options["maximum_element_count"] == 5
+
+
+def test_longitudinal_metric_traces_axis_rays_at_all_wavelengths() -> None:
+    design = OpticalDesign.starter()
+    system = OptilandAdapter().to_optic(design)
+
+    metrics = longitudinal_aberration_metrics(
+        system,
+        design.settings.wavelengths_um,
+        design.settings.wavelength_weights,
+        design.settings.primary_wavelength_um,
+    )
+
+    assert metrics["rms_um"] > 0
+    assert metrics["maximum_abs_um"] >= metrics["primary_lsa_um"] > 0
+    assert metrics["axial_color_um"] > 0
+
+
+def test_continuous_design_uses_longitudinal_aberration_objective() -> None:
+    design = OpticalDesign.starter()
+    for element in design.elements:
+        element.element_locked = True
+    design.elements[0].element_locked = False
+    design.elements[0].is_catalog = False
+    design.elements[0].surfaces[0].radius_locked = False
+
+    result = run_automatic_design(
+        design,
+        {
+            "vary_radii": True,
+            "vary_air_gaps": False,
+            "vary_image_plane": False,
+            "max_evaluations": 12,
+            "time_limit_seconds": 20,
+            "efl_weight": 1.0,
+            "bfl_weight": 0.0,
+            "spot_weight": 0.0,
+            "longitudinal_weight": 8.0,
+            "longitudinal_tolerance_um": 100.0,
+            "distortion_weight": 0.0,
+            "track_weight": 0.0,
+        },
+    )
+
+    assert result["valid"], result.get("error")
+    assert result["evaluations"] == 12
+    assert result["best_score"] < result["initial_score"]
+    assert result["metrics"]["longitudinal_rms_um"] > 0

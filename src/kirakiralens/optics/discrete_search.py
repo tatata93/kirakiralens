@@ -11,6 +11,7 @@ import numpy as np
 
 from ..domain import LensElement, OpticalDesign, lens_element_from_dict, new_id
 from .configuration import resolved_field_weights
+from .longitudinal import longitudinal_aberration_metrics
 from .classic_forms import design_matches_form, form_summary
 from .optiland_adapter import OptilandAdapter
 from .signature import analysis_signature
@@ -363,6 +364,23 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
                 share = field_weights[field_index] * wavelength_weights[wavelength_index]
                 score += options["spot_weight"] * share * (rms / airy_mm) ** 2
 
+        longitudinal: dict[str, float] = {}
+        if options["longitudinal_weight"] > 0 or options["longitudinal_hard"]:
+            longitudinal = longitudinal_aberration_metrics(
+                system,
+                wavelengths,
+                design.settings.wavelength_weights,
+                design.settings.primary_wavelength_um,
+            )
+            score += options["longitudinal_weight"] * (
+                longitudinal["rms_um"] / options["longitudinal_tolerance_um"]
+            ) ** 2
+            if options["longitudinal_hard"] and longitudinal["rms_um"] > options["longitudinal_tolerance_um"]:
+                score += 1e6 * max(
+                    longitudinal["rms_um"] / options["longitudinal_tolerance_um"],
+                    1.0,
+                ) ** 2
+
         edge_distortion = None
         if options["distortion_weight"] > 0:
             distortion = Distortion(system, wavelengths=[design.settings.primary_wavelength_um], num_points=5, distortion_type="f-tan")
@@ -376,6 +394,10 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
             "image_distance_mm": image_distance,
             "maximum_rms_spot_um": maximum_spot * 1000.0,
             "edge_distortion_percent": edge_distortion,
+            "longitudinal_rms_um": longitudinal.get("rms_um"),
+            "maximum_longitudinal_aberration_um": longitudinal.get("maximum_abs_um"),
+            "primary_longitudinal_spherical_um": longitudinal.get("primary_lsa_um"),
+            "axial_color_um": longitudinal.get("axial_color_um"),
             "total_track_mm": total_track,
             "maximum_outer_diameter_mm": max(element.outer_diameter_mm for element in design.elements),
             "mtf40_min": None,
@@ -387,6 +409,10 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
             "image_distance_mm": design.elements[-1].gap_after_mm,
             "maximum_rms_spot_um": None,
             "edge_distortion_percent": None,
+            "longitudinal_rms_um": None,
+            "maximum_longitudinal_aberration_um": None,
+            "primary_longitudinal_spherical_um": None,
+            "axial_color_um": None,
             "total_track_mm": None,
             "maximum_outer_diameter_mm": None,
             "mtf40_min": None,
@@ -531,6 +557,11 @@ def _constraints_satisfied(metrics: dict[str, float | None], options: dict[str, 
     total_track = metrics.get("total_track_mm")
     if options["track_hard"] and (
         total_track is None or _track_violation(total_track, options) > 0
+    ):
+        return False
+    longitudinal_rms = metrics.get("longitudinal_rms_um")
+    if options["longitudinal_hard"] and (
+        longitudinal_rms is None or longitudinal_rms > options["longitudinal_tolerance_um"]
     ):
         return False
     return True

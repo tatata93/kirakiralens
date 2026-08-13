@@ -21,13 +21,22 @@ The optimizer uses Optiland real-ray operands with explicit normalization:
 - final-surface-to-image distance error divided by the configured BFL tolerance;
 - RMS spot radius at every configured field and wavelength divided by the
   primary-wavelength Airy radius;
+- on-axis longitudinal focus shift at four pupil zones for every configured
+  wavelength, combined as a wavelength-weighted RMS and divided by the user's
+  longitudinal-aberration tolerance;
 - chief-ray image-height error divided by a 2% distortion scale.
 - excess total track divided by its normalization tolerance.
 
 The field and wavelength weights configured in the image/ray window are
-normalized before use. The four merit groups have independent adjustable
-weights. A failed ray trace receives a large penalty and cannot become the best
-result.
+normalized before use. Every merit group has an independent adjustable weight.
+The longitudinal-aberration tolerance can also be made a required upper limit;
+then candidates exceeding it are rejected. A failed ray trace receives a large
+penalty and cannot become the best result.
+
+The automatic-design window separates settings into `設計目標`, `変更範囲`, and
+`画質目標`. Balanced, resolution, longitudinal-aberration, and distortion
+presets set the relative weights, while every numeric value remains editable.
+Changing a preset value marks the setup as custom.
 
 F-number is passed to Optiland as the image-space F-number aperture definition.
 It therefore defines the ray bundle for every merit evaluation rather than
@@ -38,6 +47,12 @@ still be inspected in the performance window for tangential/sagittal MTF at
 10/20/40 lp/mm, chromatic behavior, field curvature, distortion, ray clipping,
 and construction constraints. Numerical goals depend on sensor sampling,
 intended rendering, manufacturing tolerance, and cost.
+
+The longitudinal merit uses the same real-ray focus-shift convention as the
+performance window's longitudinal aberration plot. The primary-wavelength
+paraxial focus is the common zero; the merit therefore responds to both
+longitudinal spherical aberration across the pupil and axial chromatic focus
+shift across wavelengths. It is not merely a third-order Seidel coefficient.
 
 ## Variables and locks
 

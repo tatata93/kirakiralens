@@ -67,6 +67,11 @@ Verified working:
   user-entered component-count limits and moves the aperture stop among modeled
   surfaces. Locked components remain fixed. Each retained candidate reports its
   component count and stop surface.
+- Automatic-design settings are separated into design targets, change scope,
+  and image-quality targets. Image-quality presets and editable relative weights
+  include a real-ray longitudinal-aberration RMS target. The target can be a
+  soft merit term or a required upper limit in both discrete and continuous
+  stages; results report RMS, maximum longitudinal shift, and axial color.
 - Classical-form mode creates catalog-only Cooke Triplet, Tessar, and six-
   singlet Double Gauss approximations from explicit component-count, power,
   shape, and stop-adjacency rules. It does not depend on the current design's
@@ -103,6 +108,7 @@ workbook. They are deliberately not designable. See
 - `src/kirakiralens/optics/performance_process.py`: isolated performance worker.
 - `src/kirakiralens/optics/automatic_design.py`: locks, variables, normalized merit, and optimization.
 - `src/kirakiralens/optics/discrete_search.py`: catalog substitution, orientation, order, component-count, and stop-surface beam search.
+- `src/kirakiralens/optics/longitudinal.py`: shared real-ray longitudinal-aberration merit metrics.
 - `src/kirakiralens/optics/classic_forms.py`: Triplet, Tessar, and Double Gauss template rules and seed construction.
 - `src/kirakiralens/optics/automatic_design_process.py`: isolated optimization worker.
 - `src/kirakiralens/optics/paraxial.py`: ray paths using indices returned by Optiland.
@@ -124,7 +130,7 @@ Run:
 .\.venv\Scripts\python.exe -m kirakiralens
 ```
 
-The current suite has thirty-three passing tests. A Windows-rendered 1500 x 900
+The current suite has thirty-five passing tests. A Windows-rendered 1500 x 900
 capture is stored at `docs/images/main-window.png` and has been checked for text
 clipping and incoherent overlap.
 
