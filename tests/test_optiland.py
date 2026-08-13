@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kirakiralens.domain import OpticalDesign
+from kirakiralens.domain import DesignSettings, LensElement, OpticalDesign, SurfaceSpec
 from kirakiralens.optics.optiland_adapter import OptilandAdapter
 from kirakiralens.optics.paraxial import trace_parallel_rays
 
@@ -20,7 +20,7 @@ def test_starter_prescription_matches_initial_targets(monkeypatch, tmp_path: Pat
     assert abs(result.recommended_image_distance_mm - 45.46) < 0.01
     rays = trace_parallel_rays(design, result.refractive_indices)
     assert len(rays) == design.settings.layout_ray_count * len(design.settings.field_fractions)
-    assert all(len(ray.points) == 7 for ray in rays)
+    assert all(len(ray.points) == 8 for ray in rays)
     assert {ray.field_index for ray in rays} == {0, 1, 2}
     assert result.angle_of_view_diagonal_deg is not None
     assert 46.0 < result.angle_of_view_diagonal_deg < 47.0
@@ -71,3 +71,61 @@ def test_recommended_image_distance_tracks_the_lens_focus(monkeypatch, tmp_path:
     assert result.back_focal_length_mm == 30.0
     assert result.image_distance_mm == 30.0
     assert abs(result.recommended_image_distance_mm - 45.46) < 0.01
+
+
+def test_single_positive_lens_focuses_parallel_rays_on_the_image(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    element = LensElement(
+        name="Edmund 22-426 equivalent",
+        manufacturer="Edmund Optics",
+        part_number="22-426",
+        shape="double_convex",
+        outer_diameter_mm=49.0,
+        gap_after_mm=2.0,
+        surfaces=[
+            SurfaceSpec(42.12, "Fused Silica (Corning 7980)", 21.8, 49.0),
+            SurfaceSpec(-42.12, "air", 0.0, 49.0),
+        ],
+    )
+    settings = DesignSettings(field_mode="angles", field_angles_deg=[0.0], field_weights=[1.0])
+    design = OpticalDesign("single positive lens", settings, [element])
+
+    initial = OptilandAdapter().analyze_first_order(design)
+    assert initial.valid, initial.error
+    assert initial.effective_focal_length_mm is not None and initial.effective_focal_length_mm > 0
+    assert initial.recommended_image_distance_mm is not None
+    assert initial.paraxial_focus_distance_mm == initial.recommended_image_distance_mm
+
+    element.gap_after_mm = initial.recommended_image_distance_mm
+    focused = OptilandAdapter().analyze_first_order(design)
+    rays = trace_parallel_rays(design, focused.refractive_indices, fractions=(-0.8, 0.0, 0.8))
+
+    assert focused.paraxial_focus_distance_mm is not None
+    assert abs(focused.paraxial_focus_distance_mm - element.gap_after_mm) < 1e-9
+    assert all(abs(ray.points[-1].y_mm) < 1e-9 for ray in rays)
+    assert all(ray.points[0].z_mm < 0 for ray in rays)
+
+
+def test_single_negative_lens_reports_virtual_focus_without_zeroing_image(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "matplotlib"))
+    element = LensElement(
+        name="Negative singlet",
+        shape="plano_concave",
+        outer_diameter_mm=25.0,
+        gap_after_mm=20.0,
+        surfaces=[
+            SurfaceSpec(-22.92, "Fused Silica (Corning 7980)", 2.0, 24.0),
+            SurfaceSpec(None, "air", 0.0, 24.0),
+        ],
+    )
+    settings = DesignSettings(field_mode="angles", field_angles_deg=[0.0], field_weights=[1.0])
+    design = OpticalDesign("single negative lens", settings, [element])
+
+    result = OptilandAdapter().analyze_first_order(design)
+
+    assert result.valid, result.error
+    assert result.effective_focal_length_mm is not None and result.effective_focal_length_mm < 0
+    assert result.paraxial_focus_distance_mm is not None and result.paraxial_focus_distance_mm < 0
+    assert result.recommended_image_distance_mm is None
+    assert any("実像焦点がありません" in warning for warning in result.warnings)
+    assert element.gap_after_mm == 20.0

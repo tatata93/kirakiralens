@@ -8,9 +8,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QContextMenuEvent, QMouseEvent
-from PySide6.QtWidgets import QApplication, QDoubleSpinBox
+from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QGraphicsSimpleTextItem
 
-from kirakiralens.domain import OpticalDesign
+from kirakiralens.domain import DesignSettings, OpticalDesign
 from kirakiralens.optics.optiland_adapter import OptilandAdapter
 from kirakiralens.ui.automatic_design_window import AutomaticDesignWindow
 from kirakiralens.ui.main_window import MainWindow
@@ -223,6 +223,36 @@ def test_surface_table_edits_every_surface_and_image_focus() -> None:
     bounded_result = OptilandAdapter().analyze_first_order(window.design)
     assert bounded_result.valid, bounded_result.error
     assert window._apply_automatic_image_focus(bounded_result) is False
+    window.close()
+    application.processEvents()
+
+
+def test_single_negative_catalog_lens_keeps_image_distance_and_marks_virtual_focus() -> None:
+    application = QApplication.instance() or QApplication([])
+    root = Path(__file__).resolve().parents[1]
+    window = MainWindow(root, analyze_on_start=False)
+    product = window.repository.query_products(power="negative", target_efl_mm=50.0, limit=1)[0]
+    element = window.repository.element_from_product(product.id)
+    element.gap_after_mm = 20.0
+    settings = DesignSettings(field_mode="angles", field_angles_deg=[0.0], field_weights=[1.0])
+    design = OpticalDesign("single negative catalog lens", settings, [element])
+    window._replace_design(design)
+    window._analysis_debounce.stop()
+
+    result = OptilandAdapter().analyze_first_order(design)
+    assert result.valid, result.error
+    assert window._apply_automatic_image_focus(result) is False
+    assert design.elements[0].gap_after_mm == 20.0
+
+    window.inspector.set_analysis(result, design)
+    window.lens_view.set_design(design, result)
+    scene_text = {
+        item.text()
+        for item in window.lens_view.scene().items()
+        if isinstance(item, QGraphicsSimpleTextItem)
+    }
+    assert "VIRTUAL FOCUS" in scene_text
+    assert "虚焦点" in window.inspector.focus.text()
     window.close()
     application.processEvents()
 

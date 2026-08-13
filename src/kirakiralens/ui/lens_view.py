@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from math import hypot, isfinite, sqrt
+from math import floor, hypot, isfinite, sqrt
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
@@ -80,27 +80,38 @@ class LensLayoutView(QGraphicsView):
             return
 
         geometry, image_z = self._geometry(design)
+        last_surface_z = geometry[-1][-1]
+        focus_z = self._paraxial_focus_z(last_surface_z)
         maximum_radius = max(
             max(element.outer_diameter_mm / 2 for element in design.elements),
             design.settings.sensor_height_mm / 2,
         )
         vertical_margin = max(12.0, maximum_radius * 0.8)
-        scene.setSceneRect(QRectF(-14, -maximum_radius - vertical_margin, image_z + 24, 2 * (maximum_radius + vertical_margin)))
+        scene_left = min(-14.0, focus_z - 8.0 if focus_z is not None else -14.0)
+        scene_right = max(image_z + 24.0, focus_z + 16.0 if focus_z is not None else image_z + 24.0)
+        scene.setSceneRect(
+            QRectF(
+                scene_left,
+                -maximum_radius - vertical_margin,
+                scene_right - scene_left,
+                2 * (maximum_radius + vertical_margin),
+            )
+        )
 
         grid_pen = QPen(QColor("#d9dfdc"), 0)
         grid_pen.setCosmetic(True)
         grid_step = 10.0
-        x = 0.0
-        while x <= image_z:
+        x = floor(scene_left / grid_step) * grid_step
+        while x <= scene_right:
             scene.addLine(x, -maximum_radius - 4, x, maximum_radius + 4, grid_pen)
             x += grid_step
         axis_pen = QPen(QColor("#3c4642"), 0)
         axis_pen.setCosmetic(True)
-        scene.addLine(-5, 0, image_z + 5, 0, axis_pen)
+        scene.addLine(scene_left + 3, 0, scene_right - 3, 0, axis_pen)
 
         if self._editable:
             self._draw_front_insertion(geometry[0][0], maximum_radius)
-        self._draw_rays(design)
+        self._draw_rays(design, focus_z, last_surface_z, image_z)
         colors = [QColor("#75b7c7"), QColor("#83b98c"), QColor("#d8ae62"), QColor("#9fa9d0")]
         for element_index, (element, surface_z) in enumerate(zip(design.elements, geometry, strict=True)):
             for region_index in range(len(element.surfaces) - 1):
@@ -246,17 +257,34 @@ class LensLayoutView(QGraphicsView):
         image_label.setCursor(Qt.CursorShape.PointingHandCursor)
         image_label.setZValue(8)
         scene.addItem(image_label)
+        if focus_z is not None:
+            self._draw_focus_marker(focus_z, maximum_radius)
         self._draw_back_focus_dimension(design, geometry[-1][-1], image_z, maximum_radius + 7)
 
         if self._fit_on_resize:
             self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
         self._position_gap_spins()
 
-    def _draw_rays(self, design: OpticalDesign) -> None:
-        if self._analysis is None or not self._analysis.valid:
+    def _draw_rays(
+        self,
+        design: OpticalDesign,
+        focus_z: float | None,
+        last_surface_z: float,
+        image_z: float,
+    ) -> None:
+        if self._analysis is None:
+            self._draw_ray_status("光線未解析")
+            return
+        if not self._analysis.valid:
+            status = "光線解析待ち" if self._analysis.error == "解析待ち" else "光線解析失敗"
+            self._draw_ray_status(status, error=status == "光線解析失敗")
             return
         ray_colors = ["#b3423f", "#276b62", "#386fa4", "#7a4d8b", "#d28b19"]
-        for ray in trace_parallel_rays(design, self._analysis.refractive_indices):
+        rays = trace_parallel_rays(design, self._analysis.refractive_indices)
+        if not rays:
+            self._draw_ray_status("光線データなし", error=True)
+            return
+        for ray in rays:
             if len(ray.points) < 2:
                 continue
             path = QPainterPath(QPointF(ray.points[0].z_mm, ray.points[0].y_mm))
@@ -269,6 +297,67 @@ class LensLayoutView(QGraphicsView):
             item.setPen(pen)
             item.setZValue(3)
             self.scene().addItem(item)
+
+            if focus_z is None or ray.field_index != 0 or len(ray.points) < 3:
+                continue
+            previous = ray.points[-2]
+            image = ray.points[-1]
+            dz = image.z_mm - previous.z_mm
+            if abs(dz) < 1e-12:
+                continue
+            if focus_z < last_surface_z - 1e-6:
+                guide_start = previous
+            elif focus_z > image_z + 1e-6:
+                guide_start = image
+            else:
+                continue
+            focus_y = previous.y_mm + (image.y_mm - previous.y_mm) * (focus_z - previous.z_mm) / dz
+            guide = self.scene().addLine(
+                guide_start.z_mm,
+                guide_start.y_mm,
+                focus_z,
+                focus_y,
+                QPen(QColor(178, 117, 34, 145), 0, Qt.PenStyle.DashLine),
+            )
+            guide.setZValue(2)
+
+    def _paraxial_focus_z(self, last_surface_z: float) -> float | None:
+        if self._analysis is None or not self._analysis.valid:
+            return None
+        distance = self._analysis.paraxial_focus_distance_mm
+        if distance is None or not isfinite(distance):
+            return None
+        return last_surface_z + distance
+
+    def _draw_focus_marker(self, focus_z: float, maximum_radius: float) -> None:
+        if self._analysis is None or self._analysis.paraxial_focus_distance_mm is None:
+            return
+        virtual = self._analysis.paraxial_focus_distance_mm <= 0
+        color = QColor("#b27522" if virtual else "#276b62")
+        pen = QPen(color, 0, Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+        marker = self.scene().addLine(focus_z, -maximum_radius - 2, focus_z, maximum_radius + 2, pen)
+        marker.setToolTip(
+            f"{'虚焦点' if virtual else '近軸焦点'}: 最終面から "
+            f"{self._analysis.paraxial_focus_distance_mm:.3f} mm"
+        )
+        marker.setZValue(2)
+        label = QGraphicsSimpleTextItem("VIRTUAL FOCUS" if virtual else "FOCUS")
+        label.setBrush(color)
+        label.setScale(0.18)
+        label.setPos(focus_z + 0.8, maximum_radius + 2.5)
+        label.setToolTip(marker.toolTip())
+        label.setZValue(5)
+        self.scene().addItem(label)
+
+    def _draw_ray_status(self, message: str, error: bool = False) -> None:
+        label = QGraphicsSimpleTextItem(message)
+        label.setBrush(QColor("#a13d3a" if error else "#68736f"))
+        label.setScale(0.2)
+        bounds = self.scene().sceneRect()
+        label.setPos(bounds.left() + 3, bounds.top() + 3)
+        label.setZValue(10)
+        self.scene().addItem(label)
 
     def _draw_back_focus_dimension(self, design: OpticalDesign, start: float, end: float, y: float) -> None:
         pen = QPen(QColor("#59625f"), 0)

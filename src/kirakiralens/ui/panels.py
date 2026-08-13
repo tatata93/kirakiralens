@@ -413,6 +413,7 @@ class InspectorPanel(QWidget):
         self.engine = QLabel("-")
         self.efl = QLabel("-")
         self.bfl = QLabel("-")
+        self.focus = QLabel("-")
         self.fno = QLabel("-")
         self.epd = QLabel("-")
         self.track = QLabel("-")
@@ -422,6 +423,7 @@ class InspectorPanel(QWidget):
         analysis_form.addRow("エンジン", self.engine)
         analysis_form.addRow("EFL", self.efl)
         analysis_form.addRow("BFL", self.bfl)
+        analysis_form.addRow("最終面からの近軸焦点", self.focus)
         analysis_form.addRow("F値", self.fno)
         analysis_form.addRow("入射瞳径", self.epd)
         analysis_form.addRow("全長", self.track)
@@ -462,6 +464,12 @@ class InspectorPanel(QWidget):
         if result.valid:
             self.efl.setText(self._metric(result.effective_focal_length_mm, design.settings.focal_length_target_mm))
             self.bfl.setText(self._metric(result.back_focal_length_mm, design.settings.back_focus_target_mm))
+            if result.paraxial_focus_distance_mm is None:
+                self.focus.setText("-")
+            elif result.paraxial_focus_distance_mm > 0:
+                self.focus.setText(f"{result.paraxial_focus_distance_mm:.3f} mm  (実焦点)")
+            else:
+                self.focus.setText(f"{result.paraxial_focus_distance_mm:.3f} mm  (虚焦点)")
             self.fno.setText(f"F/{result.image_f_number:.3g}")
             self.epd.setText(f"{result.entrance_pupil_diameter_mm:.3f} mm")
             self.track.setText(f"{result.total_track_mm:.3f} mm")
@@ -473,7 +481,7 @@ class InspectorPanel(QWidget):
             self.analysis_status.setText("; ".join(result.warnings))
             self.analysis_status.setStyleSheet("color: #8a5a13;")
         else:
-            for label in (self.efl, self.bfl, self.fno, self.epd, self.track, self.angle):
+            for label in (self.efl, self.bfl, self.focus, self.fno, self.epd, self.track, self.angle):
                 label.setText("-")
             self.analysis_status.setText(result.error)
             self.analysis_status.setStyleSheet("color: #a13d3a;")

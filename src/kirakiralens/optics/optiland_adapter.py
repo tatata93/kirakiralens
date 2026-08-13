@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import inf
+from math import inf, isfinite
 from typing import Any
 
 from ..domain import OpticalDesign
@@ -23,6 +23,7 @@ class FirstOrderAnalysis:
     back_focal_length_mm: float | None = None
     image_distance_mm: float | None = None
     recommended_image_distance_mm: float | None = None
+    paraxial_focus_distance_mm: float | None = None
     image_f_number: float | None = None
     entrance_pupil_diameter_mm: float | None = None
     total_track_mm: float | None = None
@@ -100,8 +101,15 @@ class OptilandAdapter:
             system = self.to_optic(design)
             final_gap = design.elements[-1].gap_after_mm
             indices = [float(value) for value in system.n()]
-            recommended_image_distance = max(0.0, float(final_gap + system.paraxial.F2()))
-            effective_focal_length = float(system.paraxial.f2())
+            focus_distance = float(final_gap + system.paraxial.F2())
+            if not isfinite(focus_distance):
+                focus_distance = None
+            recommended_image_distance = (
+                focus_distance if focus_distance is not None and focus_distance > 0.0 else None
+            )
+            # Optiland 0.5.9 returns abs(f2). The sign of -f1 distinguishes
+            # converging and diverging systems in its coordinate convention.
+            effective_focal_length = -float(system.paraxial.f1())
             angles = sensor_angle_of_view(design.settings, effective_focal_length)
             traced_fields = resolved_field_angles(design.settings)
             result = FirstOrderAnalysis(
@@ -111,6 +119,7 @@ class OptilandAdapter:
                 back_focal_length_mm=float(final_gap),
                 image_distance_mm=float(final_gap),
                 recommended_image_distance_mm=recommended_image_distance,
+                paraxial_focus_distance_mm=focus_distance,
                 image_f_number=float(system.paraxial.FNO()),
                 entrance_pupil_diameter_mm=float(system.paraxial.EPD()),
                 total_track_mm=float(system.total_track),
@@ -123,6 +132,8 @@ class OptilandAdapter:
             )
             if result.back_focal_length_mm is not None and result.back_focal_length_mm <= 0:
                 result.warnings.append("Back focal length is non-positive")
+            if result.paraxial_focus_distance_mm is not None and result.paraxial_focus_distance_mm <= 0:
+                result.warnings.append("無限遠物体の実像焦点がありません（発散系）")
             return result
         except Exception as exc:  # Optiland raises several domain-specific exception types.
             return FirstOrderAnalysis(

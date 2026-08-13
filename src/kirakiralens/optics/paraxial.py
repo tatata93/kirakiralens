@@ -24,6 +24,7 @@ def trace_parallel_rays(
     design: OpticalDesign,
     refractive_indices: list[float],
     fractions: tuple[float, ...] | None = None,
+    entrance_distance_mm: float = 10.0,
 ) -> list[ParaxialRayPath]:
     """Trace first-order rays using indices supplied by Optiland.
 
@@ -45,7 +46,8 @@ def trace_parallel_rays(
             y = entrance_radius * fraction
             slope = tan(radians(field_angle))
             z = 0.0
-            points = [RayPoint(z, y)]
+            entrance_distance = max(float(entrance_distance_mm), 0.0)
+            points = [RayPoint(-entrance_distance, y - slope * entrance_distance), RayPoint(z, y)]
             index_cursor = 1
             n_before = refractive_indices[0]
             for element in design.elements:
