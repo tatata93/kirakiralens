@@ -28,6 +28,8 @@ def test_main_window_constructs_with_generated_catalog() -> None:
     assert window.design.settings.back_focus_target_mm == 45.46
     assert window.lens_view.scene().items()
     assert window.calculate_button.text() == "光学計算"
+    assert window.user_guide_action.text() == "使い方"
+    assert (root / "docs" / "USER_GUIDE.html").is_file()
     calculation_requests = []
     original_schedule_analysis = window.schedule_analysis
     window.schedule_analysis = lambda force=False: calculation_requests.append(force)

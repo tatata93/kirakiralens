@@ -41,6 +41,12 @@ The current milestone includes:
 
 ![KiraKiraLens automatic design](docs/images/automatic-design.png)
 
+## User guide
+
+Open the Japanese [KiraKiraLens user guide](docs/USER_GUIDE.html), or choose
+`ヘルプ → 使い方` in the application. It covers task-based operation,
+performance evaluation, automatic design, and troubleshooting.
+
 ## Setup
 
 ```powershell

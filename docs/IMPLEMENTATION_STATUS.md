@@ -10,6 +10,9 @@ from Phase 2.
 Verified working:
 
 - Native PySide6 desktop application on Windows.
+- A searchable Japanese HTML user guide covers task-based operation, catalog
+  editing, performance interpretation, automatic design, and troubleshooting.
+  It opens directly from `ヘルプ → 使い方` in the desktop application.
 - Diagram-first editor with spherical, conic, and even-asphere profiles,
   selection, zoom, pan, aperture-stop marker, image plane, sequential real rays,
   and editable gap/BFL dimensions.

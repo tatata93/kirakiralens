@@ -3,8 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Slot
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import Qt, QTimer, QUrl, Slot
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -98,6 +98,9 @@ class MainWindow(QMainWindow):
         self.automatic_design_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_MediaPlay), "自動設計", self)
         self.reference_examples_action = QAction(
             style.standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton), "特許実施例", self
+        )
+        self.user_guide_action = QAction(
+            style.standardIcon(QStyle.StandardPixmap.SP_DialogHelpButton), "使い方", self
         )
         self.reset_view_action = QAction("全体表示", self)
         self.import_action = QAction("Edmund Excelを再取込", self)
@@ -237,6 +240,8 @@ class MainWindow(QMainWindow):
         design_menu.addAction(self.surface_dock.toggleViewAction())
         catalog_menu = self.menuBar().addMenu("カタログ")
         catalog_menu.addAction(self.import_action)
+        help_menu = self.menuBar().addMenu("ヘルプ")
+        help_menu.addAction(self.user_guide_action)
 
     def _connect_signals(self) -> None:
         self._analysis_controller.finished.connect(self._analysis_finished)
@@ -252,6 +257,7 @@ class MainWindow(QMainWindow):
         self.system_settings_action.triggered.connect(self.open_system_settings)
         self.automatic_design_action.triggered.connect(self.open_automatic_design)
         self.reference_examples_action.triggered.connect(self.open_reference_examples)
+        self.user_guide_action.triggered.connect(self.open_user_guide)
         self.reset_view_action.triggered.connect(self.lens_view.reset_view)
         self.import_action.triggered.connect(self.reimport_catalog)
         self.catalog_panel.productActivated.connect(self.insert_catalog_product)
@@ -993,6 +999,14 @@ class MainWindow(QMainWindow):
         self._reference_examples_window.show()
         self._reference_examples_window.raise_()
         self._reference_examples_window.activateWindow()
+
+    def open_user_guide(self) -> None:
+        guide_path = self.repository_root / "docs" / "USER_GUIDE.html"
+        if not guide_path.exists():
+            QMessageBox.warning(self, "使い方", f"ガイドが見つかりません:\n{guide_path}")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(guide_path.resolve()))):
+            QMessageBox.warning(self, "使い方", "ガイドを標準ブラウザーで開けませんでした")
 
     def _load_reference_example(self, key: str) -> None:
         self._replace_design(build_reference_design(key))

@@ -1,0 +1,919 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>KiraKiraLens 使用ガイド</title>
+  <style>
+    :root {
+      --ink: #17211f;
+      --muted: #5b6764;
+      --line: #cbd4d1;
+      --paper: #ffffff;
+      --canvas: #f3f6f5;
+      --teal: #176b67;
+      --teal-soft: #e7f2f0;
+      --blue: #386fa4;
+      --blue-soft: #edf3f9;
+      --amber: #a85d19;
+      --amber-soft: #fff4e7;
+      --red: #9f3b34;
+      --red-soft: #faecea;
+      --shadow: 0 1px 3px rgba(23, 33, 31, .10);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 78px; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--canvas);
+      font-family: "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+      font-size: 15px;
+      line-height: 1.72;
+      letter-spacing: 0;
+    }
+    a { color: var(--blue); }
+    button, input, select { font: inherit; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      min-height: 64px;
+      display: grid;
+      grid-template-columns: minmax(240px, 1fr) minmax(260px, 580px) auto;
+      align-items: center;
+      gap: 18px;
+      padding: 10px 24px;
+      color: #fff;
+      background: #1f2d2a;
+      border-bottom: 3px solid #d58a30;
+    }
+    .brand { min-width: 0; }
+    .brand strong { display: block; font-size: 18px; line-height: 1.2; }
+    .brand span { color: #cbd8d4; font-size: 12px; }
+    .search-wrap { position: relative; }
+    .search-wrap input {
+      width: 100%;
+      min-height: 40px;
+      padding: 8px 42px 8px 13px;
+      color: var(--ink);
+      background: #fff;
+      border: 1px solid #fff;
+      border-radius: 4px;
+    }
+    .search-wrap input:focus { outline: 3px solid rgba(213, 138, 48, .45); }
+    .clear-search {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      color: #40504c;
+      background: transparent;
+      border: 0;
+      font-size: 22px;
+      cursor: pointer;
+    }
+    .print-button {
+      min-height: 36px;
+      padding: 6px 12px;
+      color: #fff;
+      background: transparent;
+      border: 1px solid #81938e;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .print-button:hover { background: #30423e; }
+
+    .shell {
+      width: min(1500px, 100%);
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 244px minmax(0, 1fr);
+      align-items: start;
+    }
+    .sidebar {
+      position: sticky;
+      top: 67px;
+      height: calc(100vh - 67px);
+      overflow-y: auto;
+      padding: 22px 14px 40px 18px;
+      background: #e8eeec;
+      border-right: 1px solid var(--line);
+    }
+    .sidebar h2 {
+      margin: 0 8px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+    .sidebar a {
+      display: block;
+      padding: 7px 10px;
+      color: #293633;
+      text-decoration: none;
+      border-left: 3px solid transparent;
+      border-radius: 0 4px 4px 0;
+    }
+    .sidebar a:hover, .sidebar a.active {
+      color: #0f5552;
+      background: #fff;
+      border-left-color: var(--teal);
+    }
+    .sidebar .minor { padding-left: 22px; color: var(--muted); font-size: 13px; }
+    .sidebar-note {
+      margin: 20px 8px 0;
+      padding-top: 14px;
+      color: var(--muted);
+      border-top: 1px solid #c5cecb;
+      font-size: 12px;
+    }
+
+    main {
+      min-width: 0;
+      max-width: 1120px;
+      padding: 28px 38px 70px;
+    }
+    .guide-section {
+      margin: 0 0 40px;
+      padding-bottom: 34px;
+      border-bottom: 1px solid var(--line);
+    }
+    .guide-section:last-child { border-bottom: 0; }
+    h1, h2, h3 { line-height: 1.35; letter-spacing: 0; }
+    h1 { margin: 0 0 8px; font-size: 30px; }
+    h2 { margin: 0 0 16px; font-size: 23px; }
+    h3 { margin: 25px 0 10px; font-size: 17px; }
+    p { margin: 8px 0 14px; }
+    .lead { max-width: 850px; color: #34413e; font-size: 17px; }
+    .eyebrow {
+      margin: 0 0 7px;
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .task-picker {
+      min-width: 0;
+      margin: 22px 0 18px;
+      padding: 18px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-left: 5px solid var(--teal);
+      border-radius: 6px;
+      box-shadow: var(--shadow);
+    }
+    .task-picker label { display: block; margin-bottom: 7px; font-weight: 700; }
+    .task-row { display: grid; grid-template-columns: minmax(220px, 1fr) auto; gap: 8px; }
+    .task-row select {
+      width: 100%;
+      min-width: 0;
+      min-height: 42px;
+      padding: 7px 10px;
+      background: #fff;
+      border: 1px solid #9caaa6;
+      border-radius: 4px;
+    }
+    .go-button, .jump-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 40px;
+      padding: 7px 14px;
+      color: #fff;
+      background: var(--teal);
+      border: 1px solid var(--teal);
+      border-radius: 4px;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .go-button:hover, .jump-link:hover { background: #105754; }
+    .task-answer {
+      min-height: 52px;
+      margin-top: 12px;
+      padding: 10px 12px;
+      background: var(--teal-soft);
+      border-radius: 4px;
+      overflow-wrap: anywhere;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0;
+      padding: 0;
+      list-style: none;
+      counter-reset: step;
+    }
+    .steps li {
+      position: relative;
+      min-height: 120px;
+      padding: 42px 14px 14px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      counter-increment: step;
+    }
+    .steps li::before {
+      content: counter(step);
+      position: absolute;
+      top: 12px;
+      left: 14px;
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--blue);
+      border-radius: 50%;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .steps strong { display: block; margin-bottom: 4px; }
+
+    .callout {
+      margin: 16px 0;
+      padding: 12px 14px;
+      background: var(--blue-soft);
+      border-left: 4px solid var(--blue);
+      border-radius: 4px;
+    }
+    .callout.warning { background: var(--amber-soft); border-left-color: var(--amber); }
+    .callout.danger { background: var(--red-soft); border-left-color: var(--red); }
+    .callout strong { display: block; margin-bottom: 2px; }
+
+    figure {
+      margin: 18px 0 24px;
+      padding: 8px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      box-shadow: var(--shadow);
+    }
+    figure img {
+      display: block;
+      width: 100%;
+      height: auto;
+      cursor: zoom-in;
+    }
+    figcaption { padding: 8px 4px 2px; color: var(--muted); font-size: 13px; }
+
+    .zone-grid, .metric-grid, .recipe-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin: 14px 0;
+    }
+    .zone, .metric, .recipe {
+      padding: 15px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+    .zone h3, .metric h3, .recipe h3 { margin: 0 0 8px; }
+    .metric { border-top: 4px solid var(--teal); }
+    .metric:nth-child(2n) { border-top-color: var(--blue); }
+    .metric .good { color: #0f6355; font-weight: 700; }
+    .metric .next { color: var(--amber); font-weight: 700; }
+
+    table {
+      width: 100%;
+      margin: 14px 0 22px;
+      border-collapse: collapse;
+      background: #fff;
+      font-size: 14px;
+    }
+    th, td { padding: 10px 11px; text-align: left; vertical-align: top; border: 1px solid var(--line); }
+    th { background: #e8eeec; font-weight: 700; }
+    tbody tr:nth-child(even) { background: #f8faf9; }
+    code, kbd {
+      padding: 1px 5px;
+      background: #edf1f0;
+      border: 1px solid #d4dcda;
+      border-radius: 3px;
+      font-family: Consolas, monospace;
+      font-size: .92em;
+    }
+    kbd { color: #fff; background: #3d4a47; border-color: #3d4a47; }
+    ul, ol { padding-left: 22px; }
+    li { margin: 5px 0; }
+    .checklist { padding-left: 0; list-style: none; }
+    .checklist li { position: relative; padding-left: 26px; }
+    .checklist li::before {
+      content: "";
+      position: absolute;
+      top: .38em;
+      left: 2px;
+      width: 12px;
+      height: 12px;
+      background: #fff;
+      border: 2px solid var(--teal);
+      border-radius: 2px;
+    }
+    details {
+      margin: 8px 0;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+    }
+    summary { padding: 11px 13px; font-weight: 700; cursor: pointer; }
+    details > div { padding: 0 13px 13px; }
+    .small { color: var(--muted); font-size: 13px; }
+    .search-empty {
+      display: none;
+      margin: 26px 0;
+      padding: 18px;
+      background: var(--amber-soft);
+      border: 1px solid #e4ba8e;
+      border-radius: 5px;
+    }
+    .source-list { font-size: 13px; }
+
+    dialog {
+      width: min(94vw, 1400px);
+      max-height: 94vh;
+      padding: 10px;
+      border: 0;
+      border-radius: 6px;
+      background: #fff;
+      box-shadow: 0 12px 48px rgba(0, 0, 0, .35);
+    }
+    dialog::backdrop { background: rgba(11, 18, 17, .78); }
+    dialog img { display: block; max-width: 100%; max-height: calc(94vh - 54px); margin: auto; }
+    .dialog-close {
+      float: right;
+      width: 34px;
+      height: 34px;
+      margin-bottom: 8px;
+      padding: 0;
+      color: #fff;
+      background: #283532;
+      border: 0;
+      border-radius: 4px;
+      font-size: 22px;
+      cursor: pointer;
+    }
+
+    @media (max-width: 980px) {
+      .topbar { grid-template-columns: 1fr auto; }
+      .search-wrap { grid-column: 1 / -1; grid-row: 2; }
+      .shell { width: 100%; max-width: 100vw; grid-template-columns: minmax(0, 1fr); overflow-x: hidden; }
+      .sidebar { position: static; width: 100%; min-width: 0; max-width: 100vw; height: auto; display: flex; overflow-x: auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .sidebar h2, .sidebar-note { display: none; }
+      .sidebar a { flex: 0 0 auto; border-left: 0; border-bottom: 3px solid transparent; border-radius: 4px 4px 0 0; }
+      .sidebar a:hover, .sidebar a.active { border-left-color: transparent; border-bottom-color: var(--teal); }
+      .sidebar .minor { padding-left: 10px; }
+      main { width: 100%; min-width: 0; padding: 24px 20px 60px; }
+    }
+    @media (max-width: 720px) {
+      .topbar { padding: 10px 14px; gap: 10px; }
+      .brand span, .print-button { display: none; }
+      .steps, .zone-grid, .metric-grid, .recipe-grid { grid-template-columns: 1fr; }
+      .task-row { grid-template-columns: minmax(0, 1fr); }
+      h1 { font-size: 25px; }
+      table { display: block; overflow-x: auto; white-space: normal; }
+    }
+    @media print {
+      .topbar, .sidebar, .task-picker, .dialog-close { display: none !important; }
+      body { background: #fff; font-size: 10pt; }
+      .shell { display: block; }
+      main { max-width: none; padding: 0; }
+      .guide-section { break-inside: avoid; }
+      figure, .zone, .metric, .recipe { box-shadow: none; break-inside: avoid; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <strong>KiraKiraLens 使用ガイド</strong>
+      <span>市販レンズから写真用レンズを組み立て、解析する</span>
+    </div>
+    <div class="search-wrap">
+      <input id="guide-search" type="search" placeholder="例: 焦点が合わない、MTF、レンズを削除" aria-label="ガイド内を検索">
+      <button class="clear-search" id="clear-search" type="button" title="検索を消去" aria-label="検索を消去">×</button>
+    </div>
+    <button class="print-button" type="button" onclick="window.print()">印刷</button>
+  </header>
+
+  <div class="shell">
+    <nav class="sidebar" aria-label="目次">
+      <h2>目次</h2>
+      <a href="#start">まず設計する</a>
+      <a href="#screen">画面の見方</a>
+      <a href="#catalog">市販レンズを使う</a>
+      <a href="#editing">構成図で編集する</a>
+      <a href="#conditions">像面・光線条件</a>
+      <a href="#analysis">性能を調べる</a>
+      <a class="minor" href="#good-lens">よく写るレンズとは</a>
+      <a class="minor" href="#metric-reading">各グラフの読み方</a>
+      <a href="#automation">自動設計</a>
+      <a href="#reference">特許実施例</a>
+      <a href="#trouble">困ったとき</a>
+      <a href="#glossary">用語</a>
+      <a href="#limits">計算の限界</a>
+      <div class="sidebar-note">更新: 2026-08-13<br>対象: 現在の main 版</div>
+    </nav>
+
+    <main id="content">
+      <div id="search-empty" class="search-empty">一致する項目がありません。短い語にして検索してください。</div>
+
+      <section class="guide-section" id="start" data-title="まず設計する 基本 最短 手順">
+        <p class="eyebrow">最短ルート</p>
+        <h1>まず1本、解析できる状態まで進める</h1>
+        <p class="lead">KiraKiraLensは、中央のレンズ構成図を触って設計します。数値を変えただけでは重い性能計算を始めません。構成を作り、一次計算を確認し、必要なときだけ性能評価を実行します。</p>
+
+        <div class="task-picker">
+          <label for="task-select">いま、何をしたいですか？</label>
+          <div class="task-row">
+            <select id="task-select">
+              <option value="first">最初から50 mm F4を設計したい</option>
+              <option value="insert">市販レンズを途中へ入れたい</option>
+              <option value="replace">今のレンズを市販品へ置換したい</option>
+              <option value="focus">光線が像面で合わない</option>
+              <option value="quality">よく写るか判断したい</option>
+              <option value="compare">2つの設計を同じ尺度で比較したい</option>
+              <option value="auto">自動設計を始めたい</option>
+              <option value="edit">曲率や硝材を自由に編集したい</option>
+            </select>
+            <button class="go-button" id="task-go" type="button">該当箇所へ</button>
+          </div>
+          <div class="task-answer" id="task-answer" aria-live="polite"></div>
+        </div>
+
+        <ol class="steps">
+          <li><strong>仕様を決める</strong>上部で焦点距離、開口、BFL、最大径を設定します。最初は50 mm、F/4のプリセットで構いません。</li>
+          <li><strong>構成を作る</strong>左のカタログで部品を選び、構成図の挿入位置を右クリックします。レンズ本体の右クリックで置換や反転ができます。</li>
+          <li><strong>間隔を合わせる</strong>構成図下の数値欄で空気間隔とBFLを調整します。曲面同士が重ならない距離を確保します。</li>
+          <li><strong>一次計算</strong><b>光学計算</b>または <kbd>F5</kbd> を押し、EFL、BFL、F値と光線経路を確認します。</li>
+          <li><strong>性能解析</strong><b>性能評価</b>を開いて<b>解析実行</b>を押します。中心だけでなく70%像高と隅を見ます。</li>
+          <li><strong>保存する</strong><b>ファイル → 保存</b>で <code>.kklens</code> として保存します。自動設計の前にも一度保存します。</li>
+        </ol>
+
+        <div class="callout warning">
+          <strong>最初に覚える違い</strong>
+          上部の<b>光学計算</b>は焦点距離や光線経路を確認する軽い一次解析です。<b>性能評価 → 解析実行</b>はMTFや各種収差を求める重い計算です。
+        </div>
+      </section>
+
+      <section class="guide-section" id="screen" data-title="画面 見方 メイン ウィンドウ カタログ 構成図 選択項目">
+        <h2>画面の見方</h2>
+        <figure>
+          <img src="images/main-window.png" alt="KiraKiraLensのメイン画面。左にカタログ、中央に構成図、右に選択項目がある" data-zoomable>
+          <figcaption>画像をクリックすると拡大します。中央の構成図が主編集画面です。</figcaption>
+        </figure>
+        <div class="zone-grid">
+          <article class="zone">
+            <h3>上部: 設計全体</h3>
+            <p>保存、元に戻す、光学計算、性能評価、像面・光線条件、自動設計があります。焦点距離、開口、BFL、最大径もここで指定します。</p>
+          </article>
+          <article class="zone">
+            <h3>左: レンズカタログ</h3>
+            <p>メーカー、形状、硝材、外径、有効径、EFLなどで市販品を絞ります。選択した部品が、挿入・置換の対象です。</p>
+          </article>
+          <article class="zone">
+            <h3>中央: レンズ構成図</h3>
+            <p>面、レンズ本体、空気間隔、像面をクリックします。右クリックで、その場所に合う操作が出ます。</p>
+          </article>
+          <article class="zone">
+            <h3>右: 選択項目と一次解析</h3>
+            <p>選択中のレンズや面を数値編集します。下部には実際に計算されたEFL、BFL、F値、画角などが表示されます。</p>
+          </article>
+        </div>
+        <p><b>図が小さくなったとき:</b> メニューの<b>設計 → 全体表示</b>を使います。細部はホイールで拡大し、ドラッグで移動できます。</p>
+      </section>
+
+      <section class="guide-section" id="catalog" data-title="市販 レンズ カタログ 絞り込み 挿入 置換 エドモンド 型番 メーカー">
+        <h2>市販レンズを探して使う</h2>
+        <h3>候補が多すぎるとき</h3>
+        <ol>
+          <li>上部で目標の焦点距離、F値、最大径を先に決めます。</li>
+          <li>カタログの<b>撮影用絞込</b>を押します。必要な入射光束を通せる外径が下限として入ります。</li>
+          <li><b>正レンズ / 負レンズ</b>と<b>形状</b>を選びます。型が決まっている場合は、各位置に必要な符号を先に合わせます。</li>
+          <li>必要ならメーカー、硝材、コーティング、CA、EFL範囲、波長で絞ります。</li>
+          <li>表の行を選ぶと、型番、外径、CA、EFL、BFL、硝材、対応波長が下に表示されます。</li>
+        </ol>
+        <div class="callout">
+          <strong>外径とCAは別物です</strong>
+          外径は部品そのものの直径、CAは光学的に使用できる有効径です。F/4の50 mmなら入射瞳径の目安は12.5 mmですが、斜め光束と配置によって各面で必要な径は増えます。CAがぎりぎりの部品だけで構成すると周辺光線が欠けやすくなります。
+        </div>
+
+        <table>
+          <thead><tr><th>したいこと</th><th>操作</th></tr></thead>
+          <tbody>
+            <tr><td>末尾へ追加</td><td>カタログで行を選択し、<b>設計へ追加</b>または行をダブルクリック。</td></tr>
+            <tr><td>レンズ間へ挿入</td><td>カタログで行を選択し、構成図の空気間隔を右クリックして<b>選択中のカタログレンズを挿入</b>。</td></tr>
+            <tr><td>L1より物体側へ挿入</td><td>構成図左端の「+」領域を右クリックし、<b>選択中のカタログレンズをL1の前へ挿入</b>。</td></tr>
+            <tr><td>今のレンズを置換</td><td>先にカタログの行を選択し、置換したいレンズ本体を右クリックして<b>選択中のカタログレンズに置換</b>。</td></tr>
+            <tr><td>表裏を変更</td><td>レンズ本体を右クリックして<b>レンズを反転</b>。曲率符号、面順、硝材順もまとめて反転します。</td></tr>
+          </tbody>
+        </table>
+        <div class="callout danger">
+          <strong>「不完全データも表示」は閲覧用です</strong>
+          曲率、厚さ、硝材などが欠けた部品は、そのまま光学設計へ使用できません。検索結果を増やす目的以外では通常オフにします。
+        </div>
+      </section>
+
+      <section class="guide-section" id="editing" data-title="構成図 編集 面 曲率 硝材 間隔 BFL 削除 反転 固定 ロック カスタム化 絞り">
+        <h2>構成図で編集する</h2>
+        <table>
+          <thead><tr><th>クリックする場所</th><th>主に変更できるもの</th><th>よく使う右クリック操作</th></tr></thead>
+          <tbody>
+            <tr><td>レンズの曲面</td><td>曲率半径、面後の媒質、有効径、コーニック、非球面係数、コーティング</td><td>面の追加・複製・削除、平面/球面切替、曲率固定、絞り位置</td></tr>
+            <tr><td>レンズ本体</td><td>名称、外径、後方間隔、各種固定</td><td>複製、反転、カタログ品へ置換、カスタム化、前後へ挿入、削除</td></tr>
+            <tr><td>レンズ間の空白</td><td>空気間隔、最小値、最大値、間隔固定</td><td>0 mm、固定切替、絞り位置、カタログ/カスタムレンズ挿入</td></tr>
+            <tr><td>IMAGEの線</td><td>センサー寸法、像面距離、物体距離、視野、波長、光線数</td><td>像面・光線条件を編集</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="edit-custom">市販品の曲率や厚さを変更したい</h3>
+        <p>カタログ品の処方は、型番との対応を守るため直接変更できません。対象レンズを選択して<b>カスタム化</b>を押すと、メーカー・型番から独立した編集可能なコピーになります。</p>
+
+        <h3>間隔を正確に変えたい</h3>
+        <p>構成図下の寸法欄、または間隔をクリックしたときに出る上部の<b>間隔</b>欄へmm単位で入力します。ドラッグは大まかな移動、数値欄は最終調整に使います。最後のレンズ後方の間隔がBFLです。</p>
+
+        <h3>固定は何のためにあるか</h3>
+        <p>固定した値は自動設計で変更されません。残したい曲率、硝材、径、レンズ順、空気間隔、像面位置を先に固定します。すべて固定すると自動設計の変更可能な値がなくなるため、必要な自由度は残します。</p>
+        <div class="callout warning">
+          <strong>レンズのめり込み</strong>
+          頂点間隔が正でも、強い曲面の縁同士は交差することがあります。構成図を確認し、間隔を増やしてください。自動設計では<b>変更範囲 → 最小すき間</b>を0より大きくすると、曲面形状を含む接触判定が働きます。
+        </div>
+      </section>
+
+      <section class="guide-section" id="conditions" data-title="像面 光線 条件 センサー フルフレーム APS-C 画角 波長 F d C 光線数 入射瞳 FNO EPD 絞り">
+        <h2>像面・光線条件を決める</h2>
+        <p>構成図のIMAGE線をクリックするか、上部の<b>像面・光線条件</b>を開きます。設定変更後は<b>適用</b>を押します。</p>
+        <div class="zone-grid">
+          <article class="zone">
+            <h3>像面</h3>
+            <p>センサープリセットまたは幅・高さを設定します。フルフレームは36 × 24 mm、対角隅の像高は約21.63 mmです。<b>像面を最良焦点へ追従</b>をオンにすると、処方変更後に近軸最良焦点へ動きます。</p>
+          </article>
+          <article class="zone">
+            <h3>開口</h3>
+            <p>通常の写真レンズは<b>像側F値</b>が分かりやすい指定です。実測した物体側瞳径を合わせるなら<b>入射瞳径</b>、実絞りの穴寸法を固定するなら<b>絞り面の半径</b>を使います。</p>
+          </article>
+          <article class="zone">
+            <h3>視野・光線</h3>
+            <p>通常は<b>センサー対角の最大画角</b>を使い、像高比0、0.7、1.0で中心・中間・隅を評価します。特定角度を調べるときは<b>任意の半画角</b>へ切り替えます。</p>
+          </article>
+          <article class="zone">
+            <h3>波長</h3>
+            <p>最初は写真光学で一般的な<b>Fraunhofer F-d-C</b>を使います。青486.13 nm、主波長の黄587.56 nm、赤656.27 nmです。撮像RGBや独自波長も設定できます。</p>
+          </article>
+        </div>
+        <div class="callout">
+          <strong>速さと精度の調整</strong>
+          構成を試している間は光線数、スポット瞳リング数、横収差点数、曲線点数を少なめにします。候補を絞った後だけ増やし、性能評価の<b>高精度</b>で最終比較します。
+        </div>
+      </section>
+
+      <section class="guide-section" id="analysis" data-title="性能 解析 評価 MTF スポット 横収差 縦収差 像面湾曲 非点収差 歪曲 ペッツバール よく写る">
+        <h2>性能を調べる</h2>
+        <ol>
+          <li>上部の<b>性能評価</b>を開きます。</li>
+          <li>検討中は<b>解析品質: プレビュー</b>、比較時は<b>標準</b>または<b>高精度</b>を選びます。</li>
+          <li><b>解析実行</b>を押します。設計を変更しただけでは自動実行されません。</li>
+          <li>まず<b>概要</b>で中心・70%・隅を比較し、悪い箇所を各グラフで診断します。</li>
+        </ol>
+        <figure>
+          <img src="images/performance-window.png" alt="KiraKiraLensの性能評価ウィンドウ" data-zoomable>
+          <figcaption>概要にはMTF、スポット、主要収差の要約が並びます。現在版では像高を比率と実寸mmで併記します。</figcaption>
+        </figure>
+
+        <h3 id="good-lens">「よく写るレンズ」の見分け方</h3>
+        <p>写真用レンズの良さは1個の数値では決まりません。次の条件を、同じセンサー、焦点距離、F値、物体距離、視野、波長、解析品質で比較します。</p>
+        <ul class="checklist">
+          <li>目標のEFL、F値、BFLを満たし、全視野・全波長の光線が像面へ到達している。</li>
+          <li>MTFが中心だけでなく隅まで高く、TとSの低い側も保たれている。</li>
+          <li>スポットが小さく、青・緑・赤の分離が少ない。</li>
+          <li>横収差と縦収差が0付近にまとまり、瞳の端で急に増えない。</li>
+          <li>像面湾曲が小さく、TとSの隔たりも小さい。</li>
+          <li>用途に対して歪曲が許容でき、グリッドが滑らかである。</li>
+          <li>レンズが衝突せず、有効径不足による周辺光線の欠けがない。</li>
+        </ul>
+        <div class="callout warning">
+          <strong>絶対値の合格線は用途で変わります</strong>
+          同じMTF40でもセンサーの画素ピッチ、現像、製造誤差、撮影距離、F値で見え方が変わります。まず現在案より良くなったかを固定尺度で比較し、最後に実際のセンサー要求へ照らします。
+        </div>
+
+        <h3>比較の正しい手順</h3>
+        <ol>
+          <li>比較する設計で像面・光線条件を同じにします。</li>
+          <li>性能評価の解析品質とMTF上限を同じにします。</li>
+          <li>各グラフ右上の<b>軸範囲</b>を押し、X軸・Y軸の自動を外して同じ最小・最大値を入力します。</li>
+          <li>中心だけでなく、同じ実像高mmの中間・隅を比較します。</li>
+          <li>改善した指標の代わりに別の指標が悪化していないか確認します。</li>
+        </ol>
+
+        <h3 id="metric-reading">各グラフの読み方と次の操作</h3>
+        <div class="metric-grid">
+          <article class="metric">
+            <h3>MTF</h3>
+            <p><span class="good">良い傾向:</span> 0から1の間で高いほどコントラストを保ちます。40 lp/mmまで高く、中心・中間・隅、T・Sの最低側が揃うほど安定しています。</p>
+            <p><span class="next">悪いとき:</span> 像面位置、F値、曲率、空気間隔を調整します。隅だけ悪い場合は絞り位置、像面湾曲、非点収差、径不足も確認します。</p>
+          </article>
+          <article class="metric">
+            <h3>スポット</h3>
+            <p><span class="good">良い傾向:</span> 点群、RMS半径、80%半径が小さく、波長色が重なります。Airy円に近い点群は回折限界に近い目安です。</p>
+            <p><span class="next">悪いとき:</span> 中心なら球面収差・色収差、隅ならコマ・非点収差・像面湾曲を他の図で切り分けます。</p>
+          </article>
+          <article class="metric">
+            <h3>横収差</h3>
+            <p><span class="good">良い傾向:</span> 瞳座標全体で光線誤差が0 µm付近に小さくまとまり、TとS、各波長が近接します。</p>
+            <p><span class="next">悪いとき:</span> 曲線形状から中心の球面収差、周辺のコマや非点を見ます。曲線が途中で切れる場合は径、絞り、レンズ衝突を確認します。</p>
+          </article>
+          <article class="metric">
+            <h3>縦収差</h3>
+            <p><span class="good">良い傾向:</span> 全瞳高の焦点ずれが0 mm付近で縦にまとまり、F・d・C線が近接します。</p>
+            <p><span class="next">悪いとき:</span> 同一波長の曲がりは縦球面収差、波長間の横ずれは軸上色収差です。自動設計の<b>縦収差重視</b>または縦収差RMSの重み・許容値を使います。</p>
+          </article>
+          <article class="metric">
+            <h3>像面湾曲・非点収差</h3>
+            <p><span class="good">良い傾向:</span> TとSの焦点ずれが0 mmに近く、2本の隔たりが小さい状態です。縦軸は像高比と実像高mmです。</p>
+            <p><span class="next">悪いとき:</span> 両線が同じ方向へ曲がるなら像面湾曲、TとSが離れるなら非点収差を疑います。絞り位置、正負のパワー配分、面の曲率を見直します。</p>
+          </article>
+          <article class="metric">
+            <h3>歪曲・歪曲グリッド</h3>
+            <p><span class="good">良い傾向:</span> 歪曲率が0%に近く、グリッドが理想格子へ滑らかに重なります。符号は樽型・糸巻型の方向を表します。</p>
+            <p><span class="next">悪いとき:</span> 絞り前後のパワー配分と絞り位置を調整します。歪曲は像の形を変えますが、それ単独ではぼけ量を示しません。</p>
+          </article>
+          <article class="metric">
+            <h3>ペッツバール和</h3>
+            <p><span class="good">良い傾向:</span> 一般に絶対値が小さいほどペッツバール像面は平坦方向です。対応する像面半径は絶対値が大きくなります。</p>
+            <p><span class="next">悪いとき:</span> 正負レンズの屈折力配分や高屈折率材を検討します。ただし0に近いだけで、非点収差やMTFが良いとは限りません。</p>
+          </article>
+          <article class="metric">
+            <h3>画角・像高</h3>
+            <p><span class="good">良い傾向:</span> 設定したセンサー全面が、必要な画角と実像高mmで評価されています。フルフレーム隅は約21.63 mmです。</p>
+            <p><span class="next">悪いとき:</span> 像高1.0が想定センサー隅と一致しない場合は、像面・光線条件のセンサー寸法と視野指定を見直します。</p>
+          </article>
+        </div>
+
+        <table>
+          <thead><tr><th>概要の値</th><th>比較するときの見方</th></tr></thead>
+          <tbody>
+            <tr><td>全像高の最低MTF40</td><td>高いほどよい。最も悪い視野・方向を代表するため、中心だけ良い案を避けやすい。</td></tr>
+            <tr><td>隅のRMSスポット</td><td>小さいほどよい。同じ条件・単位で比較する。</td></tr>
+            <tr><td>横収差RMS最大</td><td>小さいほどよい。どの視野・波長で最大かを横収差タブで確認する。</td></tr>
+            <tr><td>隅の非点隔差</td><td>絶対値が小さいほどT/S焦点差が小さい。</td></tr>
+            <tr><td>d線の縦球面収差 / 軸上色収差</td><td>絶対値が小さいほどよい。符号より大きさと曲線形状を見る。</td></tr>
+            <tr><td>隅の歪曲 / グリッド最大歪曲</td><td>絶対値が小さいほど形状再現が素直。用途によって許容範囲を決める。</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="guide-section" id="automation" data-title="自動設計 最適化 離散探索 自由探索 古典型 テッサー トリプレット ダブルガウス 重み ロック 候補">
+        <h2>自動設計を使う</h2>
+        <p>自動設計は現在の設計を出発点にします。先に像面・視野・波長と、残したい部品や値の固定を済ませてください。実行中も元の設計は変更されず、候補を適用したときだけメイン画面へ反映されます。</p>
+        <figure>
+          <img src="images/automatic-design.png" alt="KiraKiraLensの自動設計ウィンドウ" data-zoomable>
+          <figcaption>上から探索方法、1 設計目標、2 変更範囲、3 画質目標の順に設定します。</figcaption>
+        </figure>
+
+        <div class="recipe-grid">
+          <article class="recipe">
+            <h3>今の形を整えたい</h3>
+            <p><b>今の構成を調整</b>を選択。固定していないカスタム曲率・厚さ・空気間隔・像面を連続最適化します。まず<b>局所（速い）</b>を使います。</p>
+          </article>
+          <article class="recipe">
+            <h3>同じ枚数で市販品へ置換したい</h3>
+            <p><b>今の部品数で市販レンズを交換</b>を選択。候補部品、順序、表裏を離散探索し、その後に空気間隔を詰めます。</p>
+          </article>
+          <article class="recipe">
+            <h3>枚数から自由に探したい</h3>
+            <p><b>部品数も含めて自由探索</b>を選択。最小・最大レンズ数、最大分割数、候補数、時間を現実的な範囲に絞って始めます。</p>
+          </article>
+          <article class="recipe">
+            <h3>既知の型から始めたい</h3>
+            <p><b>古典型から市販レンズを探索</b>を選択。Cooke Triplet、Tessar、Double Gaussから選び、型の正負配置を守ってカタログ候補を探します。</p>
+          </article>
+        </div>
+
+        <h3>失敗しにくい設定順</h3>
+        <ol>
+          <li><b>1 設計目標:</b> EFLと許容差、開口条件、BFL条件を入れます。Kマウント用で必ず確保したいBFLは<b>以上</b>と<b>必須</b>を使います。</li>
+          <li><b>2 変更範囲:</b> 市販品探索の有無、メーカー、表裏・順序、レンズ数、最大分割数、最小すき間を設定します。</li>
+          <li><b>3 画質目標:</b> 最初は<b>バランス</b>。解像を優先するなら<b>解像重視</b>、縦収差図を整えるなら<b>縦収差重視</b>を選びます。</li>
+          <li><b>最大時間・最大計算回数:</b> 初回は短くして成立性を確認し、有望な条件だけ長くします。</li>
+          <li><b>候補比較:</b> スコアだけで決めず、EFL、BFL、MTF40、RMSスポット、歪曲、全長、部品表、構成図を比較します。</li>
+          <li><b>この候補を設計へ適用:</b> 適用後、必ず性能評価を高精度で再実行します。</li>
+        </ol>
+
+        <div class="callout warning">
+          <strong>重み0は「評価しない」</strong>
+          たとえば歪曲の重みを0にすると、焦点距離とスポットが良くても歪曲の大きい案が上位に来ます。絶対に外せないEFL、BFL、全長、縦収差上限は<b>必須</b>も使います。
+        </div>
+        <div class="callout">
+          <strong>縦収差図を良くしたいとき</strong>
+          <b>画質目標 → 縦収差重視</b>を選ぶか、<b>縦収差RMS（軸上・全波長）</b>の相対重みを増やします。許容値を入力し、超過案を除外したい場合だけ<b>必須条件</b>をオンにします。強くしすぎると周辺MTFや歪曲が悪化するため、候補適用後に全タブを確認します。
+        </div>
+      </section>
+
+      <section class="guide-section" id="reference" data-title="特許 実施例 検証 トリプレット テッサー ダブルガウス 読み込み">
+        <h2>特許実施例で動作を確かめる</h2>
+        <ol>
+          <li>上部の<b>特許実施例</b>を開きます。</li>
+          <li>収録された実施例を選び、記載値と注意事項を確認します。</li>
+          <li>設計へ読み込み、<b>光学計算</b>でEFLやBFLを確認します。</li>
+          <li><b>性能評価 → 解析実行</b>で収差を確認します。</li>
+          <li>市販品化する場合は、左でカタログ品を選び、構成図の各レンズを右クリックして置換するか、自動設計の市販レンズ探索を使います。</li>
+        </ol>
+        <p>特許例は計算経路や符号規約の検証に便利ですが、掲載された数値が現在の硝材名、コーティング、センサー、製造条件にそのまま対応するとは限りません。読み込み後の警告と出典注記を確認してください。</p>
+      </section>
+
+      <section class="guide-section" id="trouble" data-title="困った トラブル 固まる 焦点 光線 計算できない レンズ 入らない 削除できない MTF 0">
+        <h2>困ったとき</h2>
+        <details open>
+          <summary>光線が像面で一点に集まらない</summary>
+          <div>
+            <p>異常とは限りません。実光線は球面収差、色収差、コマ、非点収差などにより広がります。まず次を順に確認します。</p>
+            <ol>
+              <li><b>像面・光線条件 → 像面を最良焦点へ追従</b>をオンにする。</li>
+              <li><b>光学計算</b>を押す。像面固定中なら解除するか、BFLを手入力する。</li>
+              <li>一次解析の「最終面からの近軸焦点」が実焦点になっているか確認する。</li>
+              <li>単レンズ1枚なら、平行光の近軸焦点に像面を置いても周辺光線や色の光線は一致しないことを理解する。</li>
+              <li>性能評価の縦収差とスポットで、実際の焦点ずれを確認する。</li>
+            </ol>
+          </div>
+        </details>
+        <details>
+          <summary>性能評価が更新されない</summary>
+          <div><p>性能評価は設計変更だけでは再計算しません。タイトルに「*」が付いたら結果が古い状態です。<b>解析実行</b>を押してください。一次解析だけならメイン画面の<b>光学計算</b>または <kbd>F5</kbd> です。</p></div>
+        </details>
+        <details>
+          <summary>解析が失敗する、グラフが途中で切れる</summary>
+          <div><p>有効径不足、絞りが小さすぎる、レンズ曲面の交差、全反射、極端な曲率や間隔を確認します。まずF値を暗くし、径と間隔を増やし、中心視野・主波長だけで成立するか切り分けます。</p></div>
+        </details>
+        <details>
+          <summary>市販レンズを挿入・置換できない</summary>
+          <div><p>左のカタログ表で対象行を先に選択してください。挿入は空気間隔または左端の「+」を右クリック、置換はレンズ本体を右クリックします。「不完全データ」の部品は設計へ使えません。</p></div>
+        </details>
+        <details>
+          <summary>曲率や硝材が編集できない</summary>
+          <div><p>カタログ品は処方保護中です。レンズ本体を選択し、<b>カスタム化</b>してから編集します。</p></div>
+        </details>
+        <details>
+          <summary>レンズを削除したい</summary>
+          <div><p>レンズ本体を右クリックして<b>レンズを削除</b>、または選択項目パネルの<b>削除</b>を押します。面だけを削除する場合、カタログ品は先にカスタム化が必要で、1要素に最低2面は残ります。</p></div>
+        </details>
+        <details>
+          <summary>自動設計に時間がかかりすぎる</summary>
+          <div><p>局所方式、短い最大時間、少ない評価回数から始めます。メーカー、形状、各位置の候補数、使用レンズ数を絞り、変更不要な要素を固定します。自由探索と大域方式は候補空間が大きいため、成立条件を確認した後に使います。</p></div>
+        </details>
+        <details>
+          <summary>前の状態へ戻したい</summary>
+          <div><p><b>編集 → 元に戻す</b>または <kbd>Ctrl</kbd> + <kbd>Z</kbd> を使います。大きな自動設計や置換の前には別名保存も行ってください。</p></div>
+        </details>
+      </section>
+
+      <section class="guide-section" id="glossary" data-title="用語 EFL BFL F値 FNO EPD CA T S RMS R80 像高 絞り">
+        <h2>よく使う用語</h2>
+        <table>
+          <thead><tr><th>用語</th><th>意味</th></tr></thead>
+          <tbody>
+            <tr><td>EFL</td><td>有効焦点距離。レンズ全体の焦点距離で、画角を決める主要値。</td></tr>
+            <tr><td>BFL</td><td>最後のレンズ面の頂点から像面までの距離。マウントやシャッターとの干渉を考える値。</td></tr>
+            <tr><td>F値 / FNO</td><td>焦点距離と有効な光束径の関係。小さいほど明るい一方、収差補正と径の要求が厳しくなる。</td></tr>
+            <tr><td>EPD</td><td>入射瞳径。物体側から見た開口絞りの像の直径。</td></tr>
+            <tr><td>CA</td><td>Clear Aperture、有効径。光線を有効に通せる直径。</td></tr>
+            <tr><td>像高</td><td>像面中心から評価点までの距離。1.0は設定センサーの対角隅で、フルフレームでは約21.63 mm。</td></tr>
+            <tr><td>T / S</td><td>TangentialとSagittal。周辺像で異なる方向の結像性能。低い側と2本の隔たりを見る。</td></tr>
+            <tr><td>RMSスポット</td><td>光線交点の広がりを二乗平均平方根で表した半径。条件が同じなら小さいほど集光が良い。</td></tr>
+            <tr><td>R80</td><td>追跡光線の80%を含む幾何学的半径。外れ光線を含む広がりを見る。</td></tr>
+            <tr><td>絞り位置</td><td>光束を制限する面。移動するとコマ、歪曲、周辺光量、レンズ径の要求が変わる。</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="guide-section" id="limits" data-title="限界 注意 公差 コーティング フレア PSF 周辺光量 センサースタック 製造">
+        <h2>この計算だけでは分からないこと</h2>
+        <p>KiraKiraLensの性能評価は、入力した公称処方をOptilandで追跡した設計上の予測です。現物の完成性能を保証する測定ではありません。</p>
+        <ul>
+          <li>製造公差、偏心、傾き、組立誤差、温度変化はまだ含みません。</li>
+          <li>フレア、ゴースト、散乱、迷光、鏡筒内面反射は評価していません。</li>
+          <li>コーティング名は保存しますが、波長別透過率の計算にはまだ使いません。</li>
+          <li>センサーカバーガラスは設定できますが、画素構造、ローパス、マイクロレンズ、現像処理は含みません。</li>
+          <li>相対照度、PSF、スルーフォーカスMTF、公差Monte Carloは今後の機能です。</li>
+        </ul>
+        <div class="callout danger">
+          <strong>購入前に確認すること</strong>
+          カタログの型番、最新仕様、在庫、コーティング、外径・縁厚、保持方法、面品質、公差はメーカー資料で再確認してください。設計上よい候補でも、固定枠や絞り機構を含めて組み立てられなければ写真用レンズにはなりません。
+        </div>
+
+        <h3>評価方法の参考資料</h3>
+        <ul class="source-list">
+          <li><a href="https://www.edmundoptics.com/knowledge-center/application-notes/imaging/modulation-transfer-function-mtf-and-mtf-curves/">Edmund Optics: The Modulation Transfer Function (MTF)</a></li>
+          <li><a href="https://optiland.readthedocs.io/en/stable/developers_guide/analysis_framework.html">Optiland: Analysis Framework</a></li>
+          <li><a href="https://www.zeiss.com/content/dam/consumer-products/downloads/industrial-lenses/datasheets/en/dimension-lenses/datasheet-zeiss-dimension-235.pdf">ZEISS Dimension MTF data sheet</a></li>
+        </ul>
+        <p class="small">MTFは作動距離、F値、センサーサイズ、波長などの条件に依存します。T/Sと複数像高を比較し、低い側を含めて判断する考え方は上記資料に基づきます。</p>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="image-dialog" aria-label="画像の拡大表示">
+    <button class="dialog-close" type="button" title="閉じる" aria-label="閉じる">×</button>
+    <img id="dialog-image" alt="">
+  </dialog>
+
+  <script>
+    const taskMap = {
+      first: {
+        target: "start",
+        text: "プリセットを確認し、カタログからレンズを挿入して、光学計算、性能評価の順に進みます。"
+      },
+      insert: {
+        target: "catalog",
+        text: "左のカタログで部品を選び、構成図の入れたい空気間隔を右クリックします。"
+      },
+      replace: {
+        target: "catalog",
+        text: "左で置換先を選び、構成図の置換元レンズを右クリックして「選択中のカタログレンズに置換」を選びます。"
+      },
+      focus: {
+        target: "trouble",
+        text: "像面追従、像面固定、BFL、一次解析の焦点位置を順に確認します。実光線が完全な一点にならないのは収差があるためです。"
+      },
+      quality: {
+        target: "good-lens",
+        text: "性能評価を実行し、最低MTF40だけでなく、隅のスポット、T/S差、色収差、像面湾曲、歪曲を同じ条件で見ます。"
+      },
+      compare: {
+        target: "analysis",
+        text: "像面・光線条件と解析品質を揃え、各図の「軸範囲」で同じX/Y尺度に固定して比較します。"
+      },
+      auto: {
+        target: "automation",
+        text: "設計目標、変更範囲、画質目標の順に決め、最初は局所方式と短い制限時間で成立性を確認します。"
+      },
+      edit: {
+        target: "edit-custom",
+        text: "カタログ品は処方保護中です。「カスタム化」で編集可能なコピーを作ってから、面をクリックして変更します。"
+      }
+    };
+
+    const taskSelect = document.getElementById("task-select");
+    const taskAnswer = document.getElementById("task-answer");
+    function updateTaskAnswer() {
+      taskAnswer.textContent = taskMap[taskSelect.value].text;
+    }
+    taskSelect.addEventListener("change", updateTaskAnswer);
+    document.getElementById("task-go").addEventListener("click", () => {
+      document.getElementById(taskMap[taskSelect.value].target).scrollIntoView({ behavior: "smooth" });
+    });
+    updateTaskAnswer();
+
+    const search = document.getElementById("guide-search");
+    const sections = [...document.querySelectorAll(".guide-section")];
+    const empty = document.getElementById("search-empty");
+    function normalize(value) {
+      return value.toLocaleLowerCase("ja").replace(/\s+/g, " ").trim();
+    }
+    function filterGuide() {
+      const query = normalize(search.value);
+      let visible = 0;
+      sections.forEach(section => {
+        const haystack = normalize(`${section.dataset.title || ""} ${section.textContent}`);
+        const show = !query || query.split(" ").every(word => haystack.includes(word));
+        section.hidden = !show;
+        if (show) visible += 1;
+      });
+      empty.style.display = visible ? "none" : "block";
+    }
+    search.addEventListener("input", filterGuide);
+    document.getElementById("clear-search").addEventListener("click", () => {
+      search.value = "";
+      filterGuide();
+      search.focus();
+    });
+
+    const navLinks = [...document.querySelectorAll(".sidebar a")];
+    const observer = new IntersectionObserver(entries => {
+      const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!visible) return;
+      navLinks.forEach(link => link.classList.toggle("active", link.getAttribute("href") === `#${visible.target.id}`));
+    }, { rootMargin: "-18% 0px -68% 0px", threshold: [0.05, 0.2, 0.5] });
+    sections.forEach(section => observer.observe(section));
+
+    const imageDialog = document.getElementById("image-dialog");
+    const dialogImage = document.getElementById("dialog-image");
+    document.querySelectorAll("[data-zoomable]").forEach(image => {
+      image.addEventListener("click", () => {
+        dialogImage.src = image.src;
+        dialogImage.alt = image.alt;
+        imageDialog.showModal();
+      });
+    });
+    imageDialog.querySelector(".dialog-close").addEventListener("click", () => imageDialog.close());
+    imageDialog.addEventListener("click", event => {
+      if (event.target === imageDialog) imageDialog.close();
+    });
+  </script>
+</body>
+</html>
