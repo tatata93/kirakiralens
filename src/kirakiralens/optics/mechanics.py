@@ -45,7 +45,10 @@ def required_air_gap_mm(
     front = right.surfaces[0]
     # Component-to-component contact is mechanical, so check the full shared
     # body diameter rather than only the smaller optical clear aperture.
-    half_diameter = min(left.outer_diameter_mm, right.outer_diameter_mm) / 2.0
+    half_diameter = min(
+        _usable_surface_half_diameter(left, rear),
+        _usable_surface_half_diameter(right, front),
+    )
     required = max(float(minimum_clearance_mm), 0.0)
     for index in range(max(samples, 3)):
         height = half_diameter * index / (max(samples, 3) - 1)
@@ -99,8 +102,6 @@ def mechanical_clearance_violations(
                 violations.append(f"L{element_index + 1} S{surface_index + 1}-S{surface_index + 2} surface crossing")
 
     for element_index, (left, right) in enumerate(zip(design.elements, design.elements[1:])):
-        if left.manufacturer == right.manufacturer == "Patent example":
-            continue
         gap = overrides.get(("air_gap", element_index, len(left.surfaces) - 1), left.gap_after_mm)
         left_radius = overrides.get(("radius", element_index, len(left.surfaces) - 1))
         right_radius = overrides.get(("radius", element_index + 1, 0))
@@ -120,8 +121,6 @@ def ensure_air_gap_clearances(design: OpticalDesign, minimum_clearance_mm: float
     """Increase unlocked inter-element gaps to clear neighboring curved surfaces."""
     valid = True
     for index, (left, right) in enumerate(zip(design.elements, design.elements[1:])):
-        if left.manufacturer == right.manufacturer == "Patent example":
-            continue
         required = required_air_gap_mm(left, right, minimum_clearance_mm)
         if not isfinite(required):
             valid = False
@@ -144,3 +143,13 @@ def _surface_half_diameter(element: LensElement, surface: SurfaceSpec) -> float:
         float(element.outer_diameter_mm),
         float(surface.clear_aperture_mm or element.outer_diameter_mm),
     ) / 2.0
+
+
+def _usable_surface_half_diameter(element: LensElement, surface: SurfaceSpec) -> float:
+    half_diameter = element.outer_diameter_mm / 2.0
+    if surface.is_plane or 1.0 + surface.conic <= 0.0:
+        return half_diameter
+    return min(
+        half_diameter,
+        abs(float(surface.radius_mm)) / sqrt(1.0 + float(surface.conic)) * 0.97,
+    )

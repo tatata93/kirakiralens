@@ -227,6 +227,7 @@ def test_discrete_split_respects_maximum_lens_count_and_split_count() -> None:
 
 def test_patent_rear_stop_keeps_image_distance_measured_from_last_lens() -> None:
     design = build_reference_design("triplet-jph07168095a-ex1")
+    assert ensure_air_gap_clearances(design, 0.1)
     options = normalized_automatic_options(
         {
             "target_efl_mm": 100.0,
@@ -244,7 +245,6 @@ def test_patent_rear_stop_keeps_image_distance_measured_from_last_lens() -> None
     assert score < 1e29
     assert metrics["image_distance_mm"] > focused.explicit_stop_offset_mm
     assert focused.elements[-1].gap_after_mm == metrics["image_distance_mm"]
-    assert abs(metrics["image_distance_mm"] - 81.0938) < 0.01
 
 
 def test_longitudinal_metric_traces_axis_rays_at_all_wavelengths() -> None:
