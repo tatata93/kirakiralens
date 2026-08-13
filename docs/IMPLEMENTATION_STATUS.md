@@ -11,7 +11,7 @@ Verified working:
 
 - Native PySide6 desktop application on Windows.
 - Diagram-first editor with spherical, conic, and even-asphere profiles,
-  selection, zoom, pan, aperture-stop marker, image plane, traced paraxial rays,
+  selection, zoom, pan, aperture-stop marker, image plane, sequential real rays,
   and editable gap/BFL dimensions.
 - Full-frame / infinity / 50 mm / F4 / Pentax K target preset with editable EFL,
   F-number, BFL, and maximum diameter controls.
@@ -47,7 +47,11 @@ Verified working:
   and unchanged prescriptions reuse bounded in-memory caches.
 - A modeless performance window calculates and plots weighted polychromatic
   MTF, spot diagrams, transverse and longitudinal aberration, field curvature,
-  astigmatism, and distortion. Stable merit metrics are stored for optimization.
+  astigmatism, wavelength-dependent distortion, an ideal-versus-real chief-ray
+  distortion grid, and the Petzval sum/radius. Stable merit metrics are stored
+  for optimization.
+- The main toolbar has an explicit `光学計算` button and F5 shortcut. Unchanged
+  prescriptions reuse cached results instead of recalculating.
 - Element diameter and per-surface clear aperture are hard radial apertures in
   Optiland real-ray tracing.
 - Catalog filters for manufacturer, text, shape, material, coating, diameter,
@@ -59,6 +63,10 @@ Verified working:
   Its discrete stage searches catalog replacements, orientation, and order with
   a bounded beam, then passes the best prescription to Optiland/SciPy continuous
   optimization of unlocked custom radii/thicknesses, air gaps, and image plane.
+- Free-topology mode also explores catalog-component insertion/deletion within
+  user-entered component-count limits and moves the aperture stop among modeled
+  surfaces. Locked components remain fixed. Each retained candidate reports its
+  component count and stop surface.
 - Classical-form mode creates catalog-only Cooke Triplet, Tessar, and six-
   singlet Double Gauss approximations from explicit component-count, power,
   shape, and stop-adjacency rules. It does not depend on the current design's
@@ -94,7 +102,7 @@ workbook. They are deliberately not designable. See
 - `src/kirakiralens/optics/performance.py`: numerical performance analyses and merit metrics.
 - `src/kirakiralens/optics/performance_process.py`: isolated performance worker.
 - `src/kirakiralens/optics/automatic_design.py`: locks, variables, normalized merit, and optimization.
-- `src/kirakiralens/optics/discrete_search.py`: catalog substitution, orientation, and order beam search.
+- `src/kirakiralens/optics/discrete_search.py`: catalog substitution, orientation, order, component-count, and stop-surface beam search.
 - `src/kirakiralens/optics/classic_forms.py`: Triplet, Tessar, and Double Gauss template rules and seed construction.
 - `src/kirakiralens/optics/automatic_design_process.py`: isolated optimization worker.
 - `src/kirakiralens/optics/paraxial.py`: ray paths using indices returned by Optiland.
@@ -116,9 +124,9 @@ Run:
 .\.venv\Scripts\python.exe -m kirakiralens
 ```
 
-The current suite has twenty-six passing tests. A Windows-rendered 1500 x 900 capture
-is stored at `docs/images/main-window.png` and has been checked for text clipping
-and incoherent overlap.
+The current suite has thirty-three passing tests. A Windows-rendered 1500 x 900
+capture is stored at `docs/images/main-window.png` and has been checked for text
+clipping and incoherent overlap.
 
 ## Known limitations and next phase
 
@@ -126,9 +134,10 @@ The next work should finish Phase 3 and expand Phase 4's discrete catalog search
 
 Not yet implemented:
 
-- Hard limits for image-quality metrics beyond EFL/BFL, floating stop-position
-  optimization, checkpoints, pause, and Pareto-front selection.
-- Element-count-changing free-topology discrete-continuous search.
+- Hard limits for image-quality metrics beyond EFL/BFL, checkpoints, pause, and
+  Pareto-front selection.
+- A truly floating stop in an air space that is not already represented by a
+  modeled surface. Current automatic stop search chooses among existing surfaces.
 - PSF, relative-illumination, through-focus, and tolerance analysis views.
 - `.seq`, `.len`, and `.zmx` exchange.
 - Vendor web collectors, price history, and stock tracking.

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QScrollArea,
     QStyle,
     QToolBar,
@@ -88,7 +89,7 @@ class MainWindow(QMainWindow):
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.redo_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_ArrowForward), "やり直す", self)
         self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
-        self.analyze_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_BrowserReload), "再解析", self)
+        self.analyze_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_BrowserReload), "光学計算", self)
         self.analyze_action.setShortcut(QKeySequence("F5"))
         self.performance_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon), "性能評価", self)
         self.system_settings_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView), "像面・光線条件", self)
@@ -108,7 +109,15 @@ class MainWindow(QMainWindow):
             self.save_action,
             self.undo_action,
             self.redo_action,
-            self.analyze_action,
+        ):
+            toolbar.addAction(action)
+        toolbar.addSeparator()
+        self.calculate_button = QPushButton(self.analyze_action.icon(), "光学計算")
+        self.calculate_button.setToolTip("現在の構成をOptilandで再計算 (F5)")
+        self.calculate_button.clicked.connect(self.analyze_action.trigger)
+        toolbar.addWidget(self.calculate_button)
+        toolbar.addSeparator()
+        for action in (
             self.performance_action,
             self.system_settings_action,
             self.automatic_design_action,
@@ -222,7 +231,7 @@ class MainWindow(QMainWindow):
         self.save_as_action.triggered.connect(lambda: self.save_design(save_as=True))
         self.undo_action.triggered.connect(self.undo)
         self.redo_action.triggered.connect(self.redo)
-        self.analyze_action.triggered.connect(lambda: self.schedule_analysis(force=True))
+        self.analyze_action.triggered.connect(lambda: self.schedule_analysis(force=False))
         self.performance_action.triggered.connect(self.open_performance_window)
         self.system_settings_action.triggered.connect(self.open_system_settings)
         self.automatic_design_action.triggered.connect(self.open_automatic_design)

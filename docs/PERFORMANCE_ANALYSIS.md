@@ -34,6 +34,14 @@ The default spectral samples are Fraunhofer F, d, and C lines at 0.48613,
   over normalized field, calculated by Optiland's parabasal-ray analysis.
 - **Distortion:** f-tan distortion in percent over normalized field for every
   wavelength.
+- **Distortion grid:** a two-dimensional f-tan chief-ray map overlays the ideal
+  image grid and the real traced image grid at the primary wavelength. Maximum
+  radial displacement is reported as a percentage of ideal image radius, with
+  the undefined zero-radius center excluded from the maximum.
+- **Petzval sum:** the paraxial surface-power sum
+  `Σ((n' - n) / (R n n'))` in 1/mm and the corresponding signed radius
+  `-1 / sum`. Optiland's third-order transverse and longitudinal Petzval totals
+  are retained alongside the direct curvature result.
 - **Image geometry:** the result stores and displays horizontal, vertical, and
   diagonal angle of view calculated from the configured sensor and actual EFL.
 
@@ -41,6 +49,8 @@ The result dictionary contains a `summary.merit_metrics` section with stable
 keys for the future optimizer: `mtf40_min`, `corner_rms_spot_um`,
 `max_ray_fan_rms_um`, `edge_distortion_percent`, `edge_astigmatism_mm`,
 `primary_longitudinal_spherical_um`, and `axial_color_um`.
+The same section also exposes `petzval_sum_per_mm`, `petzval_radius_mm`, and
+`grid_max_distortion_percent`.
 
 ## Why these metrics
 

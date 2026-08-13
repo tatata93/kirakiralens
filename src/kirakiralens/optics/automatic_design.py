@@ -59,7 +59,12 @@ DEFAULT_AUTOMATIC_OPTIONS: dict[str, Any] = {
     "mtf_screen_count": 3,
     "allow_orientation_search": True,
     "allow_order_search": True,
+    "allow_element_count_search": False,
+    "allow_stop_search": False,
+    "minimum_element_count": 1,
+    "maximum_element_count": 8,
     "candidate_pool": [],
+    "topology_pool": [],
     "classic_form": "",
     "classic_seed_design": None,
 }
@@ -92,6 +97,11 @@ def normalized_automatic_options(options: dict[str, Any] | None = None) -> dict[
     result["discrete_beam_width"] = min(max(int(result["discrete_beam_width"]), 1), 100)
     result["result_count"] = min(max(int(result["result_count"]), 1), 50)
     result["mtf_screen_count"] = min(max(int(result["mtf_screen_count"]), 0), result["result_count"])
+    result["minimum_element_count"] = min(max(int(result["minimum_element_count"]), 1), 20)
+    result["maximum_element_count"] = min(
+        max(int(result["maximum_element_count"]), result["minimum_element_count"]),
+        20,
+    )
     if result["classic_form"] not in {"", "triplet", "tessar", "double_gauss"}:
         result["classic_form"] = ""
     for key in ("efl_weight", "bfl_weight", "spot_weight", "distortion_weight", "track_weight"):
@@ -107,6 +117,8 @@ def normalized_automatic_options(options: dict[str, Any] | None = None) -> dict[
         "discrete_search",
         "allow_orientation_search",
         "allow_order_search",
+        "allow_element_count_search",
+        "allow_stop_search",
     ):
         result[key] = bool(result[key])
     return result
@@ -505,7 +517,11 @@ def _discrete_summary(result: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _public_options(options: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in options.items() if key not in {"candidate_pool", "classic_seed_design"}}
+    return {
+        key: value
+        for key, value in options.items()
+        if key not in {"candidate_pool", "topology_pool", "classic_seed_design"}
+    }
 
 
 def _optimized_candidate_list(

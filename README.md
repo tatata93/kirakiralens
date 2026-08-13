@@ -18,18 +18,24 @@ The current milestone includes:
 - directly editable image plane with sensor presets, field angles, ray sampling,
   Fraunhofer wavelength presets, and wavelength/field weights;
 - a manual performance window for polychromatic MTF, spot, transverse and
-  longitudinal aberration, field curvature, and distortion;
+  longitudinal aberration, field curvature, Petzval sum, distortion curves,
+  and ideal-versus-real distortion grids;
 - cancellable mixed discrete/continuous automatic design with numeric EFL,
   F-number, and target/minimum/range BFL goals;
 - catalog-based Cooke Triplet, Tessar, and Double Gauss template searches with
   ranked candidate comparison, layout previews, bills of materials, and
   late-stage 40 lp/mm MTF screening;
+- free-topology catalog search over component insertion/deletion, order,
+  orientation, and aperture-stop surface with configurable component-count
+  limits;
 - a complete editable surface table covering every lens surface, object, image
   size, apertures, aspheres, stop assignment, and optimization locks.
 
 ![KiraKiraLens main window](docs/images/main-window.png)
 
 ![KiraKiraLens performance window](docs/images/performance-window.png)
+
+![KiraKiraLens distortion grid](docs/images/distortion-grid.png)
 
 ## Setup
 

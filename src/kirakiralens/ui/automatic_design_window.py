@@ -73,6 +73,7 @@ class AutomaticDesignWindow(QMainWindow):
         self.search_scope = QComboBox()
         self.search_scope.addItem("現在の構成を連続最適化", "continuous")
         self.search_scope.addItem("現在の枚数で市販レンズを自由探索", "discrete")
+        self.search_scope.addItem("枚数・順序・絞り位置を自由探索", "topology")
         self.search_scope.addItem("古典型から市販レンズを探索", "classic")
         self.time_limit = QSpinBox()
         self.time_limit.setRange(1, 86400)
@@ -164,6 +165,16 @@ class AutomaticDesignWindow(QMainWindow):
         self.allow_orientation.setChecked(True)
         self.allow_order = QCheckBox("順序を探索")
         self.allow_order.setChecked(True)
+        self.allow_stop_search = QCheckBox("絞り面を探索")
+        self.allow_stop_search.setChecked(True)
+        self.minimum_elements = QSpinBox()
+        self.minimum_elements.setRange(1, 20)
+        self.minimum_elements.setValue(max(1, len(self.design.elements) - 1))
+        self.maximum_elements = QSpinBox()
+        self.maximum_elements.setRange(1, 20)
+        self.maximum_elements.setValue(min(20, max(len(self.design.elements) + 2, 4)))
+        self.minimum_elements.valueChanged.connect(self.maximum_elements.setMinimum)
+        self.maximum_elements.valueChanged.connect(self.minimum_elements.setMaximum)
         discrete_grid.addWidget(QLabel("離散評価回数"), 0, 0)
         discrete_grid.addWidget(self.discrete_evaluations, 0, 1)
         discrete_grid.addWidget(QLabel("各位置の候補数"), 0, 2)
@@ -178,6 +189,11 @@ class AutomaticDesignWindow(QMainWindow):
         discrete_grid.addWidget(self.result_count, 2, 3)
         discrete_grid.addWidget(QLabel("MTF詳細評価案"), 3, 2)
         discrete_grid.addWidget(self.mtf_screen_count, 3, 3)
+        discrete_grid.addWidget(self.allow_stop_search, 3, 0, 1, 2)
+        discrete_grid.addWidget(QLabel("部品数範囲"), 4, 0)
+        discrete_grid.addWidget(self.minimum_elements, 4, 1)
+        discrete_grid.addWidget(QLabel("～"), 4, 2)
+        discrete_grid.addWidget(self.maximum_elements, 4, 3)
         layout.addWidget(self.discrete_group)
         self.search_scope.currentIndexChanged.connect(self._search_scope_changed)
 
@@ -219,6 +235,8 @@ class AutomaticDesignWindow(QMainWindow):
         self.start_button.clicked.connect(self.start)
         self.stop_button.clicked.connect(self._controller.cancel)
         self.apply_button.clicked.connect(self._apply_best)
+        self.minimum_elements.valueChanged.connect(self._refresh_variable_count)
+        self.maximum_elements.valueChanged.connect(self._refresh_variable_count)
         controls.addWidget(self.start_button)
         controls.addWidget(self.stop_button)
         controls.addWidget(self.apply_button)
@@ -317,6 +335,8 @@ class AutomaticDesignWindow(QMainWindow):
         self.target_f_number.setValue(design.settings.f_number_target)
         self.target_bfl.setValue(design.settings.back_focus_target_mm)
         self.minimum_bfl.setValue(design.settings.back_focus_target_mm)
+        self.minimum_elements.setValue(min(self.minimum_elements.value(), len(design.elements)))
+        self.maximum_elements.setValue(max(self.maximum_elements.value(), len(design.elements)))
         self.best_design = None
         self.candidate_payloads = []
         self.candidate_table.setRowCount(0)
@@ -355,13 +375,17 @@ class AutomaticDesignWindow(QMainWindow):
                 "bfl_hard": self.bfl_hard.isChecked(),
                 "maximum_total_track_mm": self.maximum_total_track.value() if self.track_limit_enabled.isChecked() else None,
                 "track_hard": self.track_limit_enabled.isChecked() and self.track_hard.isChecked(),
-                "discrete_search": self.search_scope.currentData() in {"discrete", "classic"},
+                "discrete_search": self.search_scope.currentData() in {"discrete", "topology", "classic"},
                 "discrete_evaluations": self.discrete_evaluations.value(),
                 "result_count": self.result_count.value(),
                 "mtf_screen_count": min(self.mtf_screen_count.value(), self.result_count.value()),
                 "classic_form": self.classic_form.currentData() if self.search_scope.currentData() == "classic" else "",
                 "allow_orientation_search": self.allow_orientation.isChecked(),
-                "allow_order_search": self.allow_order.isChecked() and self.search_scope.currentData() != "classic",
+                "allow_order_search": self.allow_order.isChecked() and self.search_scope.currentData() in {"discrete", "topology"},
+                "allow_element_count_search": self.search_scope.currentData() == "topology",
+                "allow_stop_search": self.allow_stop_search.isChecked() and self.search_scope.currentData() == "topology",
+                "minimum_element_count": self.minimum_elements.value(),
+                "maximum_element_count": self.maximum_elements.value(),
             }
         )
 
@@ -375,9 +399,12 @@ class AutomaticDesignWindow(QMainWindow):
 
     def _search_scope_changed(self) -> None:
         mode = self.search_scope.currentData()
-        self.discrete_group.setEnabled(mode in {"discrete", "classic"})
+        self.discrete_group.setEnabled(mode in {"discrete", "topology", "classic"})
         self.classic_form.setEnabled(mode == "classic")
-        self.allow_order.setEnabled(mode == "discrete")
+        self.allow_order.setEnabled(mode in {"discrete", "topology"})
+        self.allow_stop_search.setEnabled(mode == "topology")
+        self.minimum_elements.setEnabled(mode == "topology")
+        self.maximum_elements.setEnabled(mode == "topology")
         self._refresh_variable_count()
 
     def _candidate_pool(self) -> list[list[dict]]:
@@ -414,6 +441,31 @@ class AutomaticDesignWindow(QMainWindow):
                     seen.add(product.id)
             pool.append([asdict(candidate) for candidate in candidates])
         return pool
+
+    def _topology_pool(self) -> list[dict]:
+        minimum_aperture = self.target_efl.value() / max(self.target_f_number.value(), 0.5)
+        maximum_diameter = self.design.settings.max_outer_diameter_mm
+        manufacturer = str(self.manufacturer.currentData())
+        products = []
+        for power in ("positive", "negative"):
+            products.extend(
+                self.repository.query_products(
+                    power=power,
+                    manufacturer=manufacturer,
+                    max_diameter_mm=maximum_diameter,
+                    min_clear_aperture_mm=minimum_aperture,
+                    target_efl_mm=self.target_efl.value(),
+                    limit=self.candidates_per_slot.value(),
+                )
+            )
+        unique = []
+        seen: set[int] = set()
+        for product in products:
+            if product.id in seen:
+                continue
+            unique.append(asdict(self.repository.element_from_product(product.id)))
+            seen.add(product.id)
+        return unique
 
     def _classic_candidate_payload(self) -> tuple[list[list[dict]], OpticalDesign]:
         form = classic_form(str(self.classic_form.currentData()))
@@ -491,9 +543,15 @@ class AutomaticDesignWindow(QMainWindow):
         if mode == "classic":
             form = classic_form(str(self.classic_form.currentData()))
             self.variable_count.setText(f"{form.label} / {len(form.slots)}部品 / 離散+連続")
+        elif mode == "topology":
+            self.variable_count.setText(
+                f"自由構成 {self.minimum_elements.value()}～{self.maximum_elements.value()}部品 / 離散+連続"
+            )
         else:
             self.variable_count.setText(f"連続 {count} 個" + (" / 離散あり" if mode == "discrete" else ""))
-        can_start = count > 0 or mode == "classic" or (mode == "discrete" and bool(self.design.elements))
+        can_start = count > 0 or mode in {"classic", "topology"} or (
+            mode == "discrete" and bool(self.design.elements)
+        )
         self.start_button.setEnabled(can_start and not self._running)
 
     def start(self) -> None:
@@ -512,6 +570,8 @@ class AutomaticDesignWindow(QMainWindow):
                 if options["classic_form"]:
                     options["candidate_pool"], seed = self._classic_candidate_payload()
                     options["classic_seed_design"] = seed.to_dict()
+                elif options["allow_element_count_search"]:
+                    options["topology_pool"] = self._topology_pool()
                 else:
                     options["candidate_pool"] = self._candidate_pool()
             except (KeyError, TypeError, ValueError) as exc:
@@ -694,7 +754,7 @@ class AutomaticDesignWindow(QMainWindow):
     def _running_changed(self, running: bool) -> None:
         self._running = running
         mode = self.search_scope.currentData()
-        can_start = bool(variable_candidates(self.design, self._options())) or mode == "classic" or (
+        can_start = bool(variable_candidates(self.design, self._options())) or mode in {"classic", "topology"} or (
             mode == "discrete" and bool(self.design.elements)
         )
         self.start_button.setEnabled(not running and can_start)

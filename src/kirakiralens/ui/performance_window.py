@@ -102,6 +102,7 @@ class PerformanceWindow(QMainWindow):
         self._build_ray_fan_tab()
         self._build_longitudinal_tab()
         self._build_field_tab()
+        self._build_distortion_grid_tab()
         layout.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
 
@@ -129,6 +130,9 @@ class PerformanceWindow(QMainWindow):
             ("edge_astigmatism_mm", "隅の非点隔差"),
             ("primary_longitudinal_spherical_um", "d線の縦球面収差"),
             ("axial_color_um", "軸上色収差"),
+            ("petzval_sum_per_mm", "ペッツバール和"),
+            ("petzval_radius_mm", "ペッツバール像面半径"),
+            ("grid_max_distortion_percent", "グリッド最大歪曲"),
         ]
         for index, (key, name) in enumerate(metric_names):
             row, column = divmod(index, 3)
@@ -189,6 +193,10 @@ class PerformanceWindow(QMainWindow):
         layout.addWidget(self.distortion_plot, 1)
         self.tabs.addTab(page, "像面・歪曲")
 
+    def _build_distortion_grid_tab(self) -> None:
+        self.distortion_grid_plot = PlotWidget(equal_axes=True)
+        self.tabs.addTab(self.distortion_grid_plot, "歪曲グリッド")
+
     def set_design(self, design: OpticalDesign) -> None:
         signature = design_signature(design)
         if signature == self._design_signature:
@@ -247,6 +255,7 @@ class PerformanceWindow(QMainWindow):
         self._render_ray_fan(result.get("ray_fan", {}))
         self._render_longitudinal(result.get("longitudinal", {}))
         self._render_field_and_distortion(result.get("field_curvature", {}), result.get("distortion", {}))
+        self._render_distortion_grid(result.get("distortion_grid", {}))
 
     def _render_summary(self, result: dict) -> None:
         summary = result.get("summary", {})
@@ -277,6 +286,9 @@ class PerformanceWindow(QMainWindow):
             "edge_astigmatism_mm": (" mm", 3),
             "primary_longitudinal_spherical_um": (" µm", 1),
             "axial_color_um": (" µm", 1),
+            "petzval_sum_per_mm": (" 1/mm", 6),
+            "petzval_radius_mm": (" mm", 2),
+            "grid_max_distortion_percent": (" %", 2),
         }
         for key, label in self.metric_labels.items():
             suffix, decimals = units[key]
@@ -421,6 +433,52 @@ class PerformanceWindow(QMainWindow):
             for index, wave in enumerate(distortion.get("series", []))
         ]
         self.distortion_plot.set_plot("歪曲収差 (f-tan)", "正規化像高", "歪曲 [%]", distortion_series, (0, 1))
+
+    def _render_distortion_grid(self, grid: dict) -> None:
+        ideal_x = grid.get("ideal_x_mm", [])
+        ideal_y = grid.get("ideal_y_mm", [])
+        real_x = grid.get("real_x_mm", [])
+        real_y = grid.get("real_y_mm", [])
+        series = []
+        series.extend(self._grid_series(ideal_x, ideal_y, "理想格子", "#59625f", False))
+        series.extend(self._grid_series(real_x, real_y, "実像格子", "#c93f3f", False))
+        maximum = grid.get("maximum_distortion_percent")
+        title = "歪曲グリッド (f-tan)"
+        if maximum is not None:
+            title += f" / 最大 {float(maximum):.2f}%"
+        self.distortion_grid_plot.set_plot(title, "像面 X [mm]", "像面 Y [mm]", series)
+
+    @staticmethod
+    def _grid_series(x_rows, y_rows, label: str, color: str, dashed: bool) -> list[dict]:
+        if not x_rows or not y_rows:
+            return []
+        output = []
+        first = True
+        for x_values, y_values in zip(x_rows, y_rows, strict=False):
+            output.append(
+                {
+                    "label": label if first else "",
+                    "x": x_values,
+                    "y": y_values,
+                    "color": color,
+                    "dashed": dashed,
+                    "legend": first,
+                }
+            )
+            first = False
+        column_count = min(len(x_rows[0]), len(y_rows[0])) if x_rows and y_rows else 0
+        for column in range(column_count):
+            output.append(
+                {
+                    "label": "",
+                    "x": [row[column] for row in x_rows],
+                    "y": [row[column] for row in y_rows],
+                    "color": color,
+                    "dashed": dashed,
+                    "legend": False,
+                }
+            )
+        return output
 
     @staticmethod
     def _format(value, decimals: int) -> str:

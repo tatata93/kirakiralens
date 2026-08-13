@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from itertools import zip_longest
 from random import Random
 from time import monotonic
 from typing import Any, Callable
 
 import numpy as np
 
-from ..domain import LensElement, OpticalDesign, lens_element_from_dict
+from ..domain import LensElement, OpticalDesign, lens_element_from_dict, new_id
 from .configuration import resolved_field_weights
 from .classic_forms import design_matches_form, form_summary
 from .optiland_adapter import OptilandAdapter
@@ -32,7 +33,11 @@ def run_discrete_search(
         [lens_element_from_dict(item) for item in slot]
         for slot in options.get("candidate_pool", [])
     ]
-    if len(pools) != len(source_design.elements) or any(not slot for slot in pools):
+    topology_pool = [lens_element_from_dict(item) for item in options.get("topology_pool", [])]
+    topology_search = bool(options.get("allow_element_count_search"))
+    if topology_search and not topology_pool:
+        return {"valid": False, "error": "自由構成探索に使う市販レンズ候補がありません"}
+    if not topology_search and (len(pools) != len(source_design.elements) or any(not slot for slot in pools)):
         return {"valid": False, "error": "離散探索候補がありません"}
 
     random = Random(options["seed"])
@@ -74,7 +79,7 @@ def run_discrete_search(
     while evaluations < evaluation_limit and attempts < maximum_attempts and monotonic() < deadline:
         attempts += 1
         parent = deepcopy(random.choice(beam).design)
-        if not _mutate(parent, pools, options, random):
+        if not _mutate(parent, pools, options, random, topology_pool):
             break
         evaluate(parent)
 
@@ -83,11 +88,16 @@ def run_discrete_search(
     valid_beam = [item for item in beam if np.isfinite(item.score) and item.score < 1e29]
     _screen_top_mtf(valid_beam, options, deadline, progress, evaluations, start)
     best = valid_beam[0]
-    topology = form_summary(options.get("classic_form", ""))
     candidates = [
-        _candidate_summary(rank, item, topology, _constraints_satisfied(item.metrics, options))
+        _candidate_summary(
+            rank,
+            item,
+            _topology_summary(item.design, options),
+            _constraints_satisfied(item.metrics, options),
+        )
         for rank, item in enumerate(valid_beam[: options["result_count"]], 1)
     ]
+    topology = _topology_summary(best.design, options)
     return {
         "valid": True,
         "constraints_satisfied": _constraints_satisfied(best.metrics, options),
@@ -102,21 +112,70 @@ def run_discrete_search(
     }
 
 
-def _mutate(design: OpticalDesign, pools: list[list[LensElement]], options: dict[str, Any], random: Random) -> bool:
-    replaceable = [index for index, element in enumerate(design.elements) if not element.element_locked and len(pools[index]) > 1]
+def _mutate(
+    design: OpticalDesign,
+    pools: list[list[LensElement]],
+    options: dict[str, Any],
+    random: Random,
+    topology_pool: list[LensElement] | None = None,
+) -> bool:
+    topology_pool = topology_pool or []
+    topology_search = bool(options.get("allow_element_count_search"))
+    replacements: dict[int, list[LensElement]] = {}
+    for index, element in enumerate(design.elements):
+        if element.element_locked:
+            continue
+        source_pool = topology_pool if topology_search else (pools[index] if index < len(pools) else [])
+        alternatives = [candidate for candidate in source_pool if _element_identity(candidate) != _element_identity(element)]
+        if alternatives:
+            replacements[index] = alternatives
+    replaceable = list(replacements)
     reversible = [
         index
         for index, element in enumerate(design.elements)
         if not element.element_locked and not element.orientation_locked
     ]
     reorderable = [index for index, element in enumerate(design.elements) if not element.element_locked]
+    insertable = [
+        index
+        for index in range(len(design.elements) + 1)
+        if index == 0
+        or (
+            not design.elements[index - 1].element_locked
+            and not design.elements[index - 1].gap_locked
+        )
+    ]
+    deletable = [
+        index
+        for index, element in enumerate(design.elements)
+        if not element.element_locked
+        and not element.gap_locked
+        and (
+            index == 0
+            or (
+                not design.elements[index - 1].element_locked
+                and not design.elements[index - 1].gap_locked
+            )
+        )
+    ]
     actions: list[str] = []
     if replaceable:
         actions.extend(["replace", "replace"])
-    if options["allow_orientation_search"] and reversible:
+    if options.get("allow_orientation_search", False) and reversible:
         actions.append("reverse")
-    if options["allow_order_search"] and len(reorderable) >= 2:
+    if options.get("allow_order_search", False) and len(reorderable) >= 2:
         actions.append("swap")
+    if (
+        topology_search
+        and topology_pool
+        and insertable
+        and len(design.elements) < options.get("maximum_element_count", 8)
+    ):
+        actions.extend(["insert", "insert"])
+    if topology_search and len(design.elements) > options.get("minimum_element_count", 1) and deletable:
+        actions.append("delete")
+    if options.get("allow_stop_search", False) and _available_stop_positions(design):
+        actions.append("stop")
     if not actions:
         return False
 
@@ -124,7 +183,8 @@ def _mutate(design: OpticalDesign, pools: list[list[LensElement]], options: dict
     if action == "replace":
         index = random.choice(replaceable)
         old = design.elements[index]
-        candidate = deepcopy(random.choice(pools[index]))
+        candidate = deepcopy(random.choice(replacements[index]))
+        candidate.id = old.id
         candidate.gap_after_mm = old.gap_after_mm
         candidate.gap_locked = old.gap_locked
         candidate.gap_min_mm = old.gap_min_mm
@@ -134,17 +194,101 @@ def _mutate(design: OpticalDesign, pools: list[list[LensElement]], options: dict
         candidate.element_locked = old.element_locked
         candidate.orientation_locked = old.orientation_locked
         design.elements[index] = candidate
+        if design.stop_after_element == index and design.stop_surface_index is not None:
+            design.stop_surface_index = min(design.stop_surface_index, len(candidate.surfaces) - 1)
     elif action == "reverse":
         index = random.choice(reversible)
+        surface_count = len(design.elements[index].surfaces)
         design.elements[index].reverse()
-    else:
+        if design.stop_after_element == index and design.stop_surface_index is not None:
+            design.stop_surface_index = surface_count - 1 - design.stop_surface_index
+    elif action == "swap":
         first, second = random.sample(reorderable, 2)
         first_gap = _gap_state(design.elements[first])
         second_gap = _gap_state(design.elements[second])
         design.elements[first], design.elements[second] = design.elements[second], design.elements[first]
         _set_gap_state(design.elements[first], first_gap)
         _set_gap_state(design.elements[second], second_gap)
+    elif action == "insert":
+        _insert_catalog_element(design, deepcopy(random.choice(topology_pool)), random.choice(insertable))
+    elif action == "delete":
+        _delete_element(design, random.choice(deletable))
+    else:
+        positions = _available_stop_positions(design)
+        design.stop_after_element, design.stop_surface_index = random.choice(positions)
     return True
+
+
+def _insert_catalog_element(design: OpticalDesign, element: LensElement, index: int) -> None:
+    index = min(max(index, 0), len(design.elements))
+    element.id = new_id()
+    element.element_locked = False
+    element.orientation_locked = False
+    element.gap_locked = False
+    element.gap_min_mm = 0.0
+    element.gap_max_mm = None
+    element.gap_after_mm = 1.0
+    if index > 0:
+        previous = design.elements[index - 1]
+        original_gap = previous.gap_after_mm
+        if index == len(design.elements):
+            previous.gap_after_mm = min(max(original_gap * 0.1, 0.1), 2.0)
+            element.gap_after_mm = max(original_gap, 0.1)
+        else:
+            internal_thickness = sum(surface.thickness_after_mm for surface in element.surfaces[:-1])
+            previous.gap_after_mm = min(max(original_gap * 0.25, 0.1), 1.0)
+            element.gap_after_mm = max(original_gap - previous.gap_after_mm - internal_thickness, 0.1)
+    design.elements.insert(index, element)
+    if index <= design.stop_after_element:
+        design.stop_after_element += 1
+
+
+def _delete_element(design: OpticalDesign, index: int) -> None:
+    if len(design.elements) <= 1 or not 0 <= index < len(design.elements):
+        return
+    old_count = len(design.elements)
+    removed = design.elements.pop(index)
+    if index > 0:
+        previous = design.elements[index - 1]
+        if index == old_count - 1:
+            previous.gap_after_mm = max(removed.gap_after_mm, previous.gap_min_mm)
+        else:
+            internal_thickness = sum(surface.thickness_after_mm for surface in removed.surfaces[:-1])
+            previous.gap_after_mm += internal_thickness + removed.gap_after_mm
+        if previous.gap_max_mm is not None:
+            previous.gap_after_mm = min(previous.gap_after_mm, previous.gap_max_mm)
+    if design.stop_after_element > index:
+        design.stop_after_element -= 1
+    elif design.stop_after_element == index:
+        design.stop_after_element = max(0, index - 1)
+        design.stop_surface_index = None
+    design.stop_after_element = min(design.stop_after_element, len(design.elements) - 1)
+
+
+def _available_stop_positions(design: OpticalDesign) -> list[tuple[int, int]]:
+    stop_element = min(max(design.stop_after_element, 0), len(design.elements) - 1)
+    current_surface = design.stop_surface_index
+    if design.elements and current_surface is None:
+        current_surface = len(design.elements[stop_element].surfaces) - 1
+    return [
+        (element_index, surface_index)
+        for element_index, element in enumerate(design.elements)
+        for surface_index in range(len(element.surfaces))
+        if (element_index, surface_index) != (stop_element, current_surface)
+    ]
+
+
+def _element_identity(element: LensElement) -> tuple[object, ...]:
+    if element.catalog_product_id is not None:
+        return ("catalog", element.catalog_product_id, element.orientation_reversed)
+    return (
+        "custom",
+        element.manufacturer,
+        element.part_number,
+        element.name,
+        tuple(surface.radius_mm for surface in element.surfaces),
+        element.orientation_reversed,
+    )
 
 
 def _gap_state(element: LensElement) -> tuple[float, bool, float, float | None]:
@@ -162,6 +306,10 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
     design.settings.focal_length_target_mm = options["target_efl_mm"]
     design.settings.f_number_target = options["target_f_number"]
     try:
+        if options.get("allow_element_count_search") and not (
+            options["minimum_element_count"] <= len(design.elements) <= options["maximum_element_count"]
+        ):
+            raise ValueError("element count constraint violated")
         if not design_matches_form(design, options.get("classic_form", "")):
             raise ValueError("classic form constraint violated")
         if not _mechanically_valid(design):
@@ -328,6 +476,25 @@ def _candidate_summary(
     }
 
 
+def _topology_summary(design: OpticalDesign, options: dict[str, Any]) -> dict[str, object] | None:
+    classic = form_summary(options.get("classic_form", ""))
+    if classic is not None:
+        return classic
+    stop_element = min(max(design.stop_after_element, 0), len(design.elements) - 1)
+    stop_surface = design.stop_surface_index
+    if stop_surface is None:
+        stop_surface = len(design.elements[stop_element].surfaces) - 1
+    label = f"自由構成 {len(design.elements)}部品 / 絞り L{stop_element + 1} S{stop_surface + 1}"
+    return {
+        "key": "free_topology" if options.get("allow_element_count_search") else "free",
+        "label": label,
+        "component_count": len(design.elements),
+        "glass_count": sum(len(element.surfaces) - 1 for element in design.elements),
+        "stop_element": stop_element,
+        "stop_surface": stop_surface,
+    }
+
+
 def _normalize(values: list[float], count: int) -> list[float]:
     clean = [max(float(value), 0.0) for value in values[:count]]
     clean.extend([1.0] * (count - len(clean)))
@@ -378,7 +545,18 @@ def _track_violation(total_track_mm: float, options: dict[str, Any]) -> float:
 
 def _identity_changes(before: OpticalDesign, after: OpticalDesign) -> list[dict[str, Any]]:
     changes = []
-    for index, (old, new) in enumerate(zip(before.elements, after.elements, strict=False)):
+    if len(before.elements) != len(after.elements):
+        changes.append({"label": "部品数", "before": len(before.elements), "after": len(after.elements)})
+    for index, (old, new) in enumerate(zip_longest(before.elements, after.elements)):
+        if old is None or new is None:
+            changes.append(
+                {
+                    "label": f"L{index + 1} 型番・向き",
+                    "before": "-" if old is None else _element_label(old),
+                    "after": "-" if new is None else _element_label(new),
+                }
+            )
+            continue
         old_name = " / ".join(item for item in (old.manufacturer, old.part_number or old.name) if item)
         new_name = " / ".join(item for item in (new.manufacturer, new.part_number or new.name) if item)
         if old_name != new_name or old.orientation_reversed != new.orientation_reversed:
@@ -389,4 +567,23 @@ def _identity_changes(before: OpticalDesign, after: OpticalDesign) -> list[dict[
                     "after": new_name + (" (反転)" if new.orientation_reversed else ""),
                 }
             )
+    before_stop = _stop_label(before)
+    after_stop = _stop_label(after)
+    if before_stop != after_stop:
+        changes.append({"label": "絞り位置", "before": before_stop, "after": after_stop})
     return changes
+
+
+def _element_label(element: LensElement) -> str:
+    name = " / ".join(item for item in (element.manufacturer, element.part_number or element.name) if item)
+    return name + (" (反転)" if element.orientation_reversed else "")
+
+
+def _stop_label(design: OpticalDesign) -> str:
+    if not design.elements:
+        return "-"
+    element_index = min(max(design.stop_after_element, 0), len(design.elements) - 1)
+    surface_index = design.stop_surface_index
+    if surface_index is None:
+        surface_index = len(design.elements[element_index].surfaces) - 1
+    return f"L{element_index + 1} S{surface_index + 1}"

@@ -66,6 +66,20 @@ lens position. It uses a seeded, bounded beam search over three operations:
 - swap two element-unlocked positions while retaining the air-gap state at
   each axial position.
 
+The separate free-topology mode broadens that operation set:
+
+- insert a filtered positive or negative catalog component at any axial slot;
+- delete an unlocked component while preserving a usable neighboring air gap;
+- vary the component count within user-entered minimum and maximum limits;
+- move the aperture stop among every modeled optical surface.
+
+Insertion and deletion are discrete operations; the following continuous stage
+still refines permitted air gaps and image distance. This is a catalog component
+topology search, not a generator that silently changes a purchased component's
+radii, thickness, glass, diameter, or cemented structure. A stop can move to any
+existing modeled surface; adding an independent dummy stop surface in empty air
+is not yet automatic.
+
 Candidates are deduplicated by their complete optical-analysis signature and
 are scored with coarse multi-field, multi-wavelength real-ray spot metrics,
 EFL, BFL, and optional distortion. The best discrete prescription becomes the
@@ -100,7 +114,8 @@ surface adjacent to the nominal stop. Reordering is disabled in this mode,
 while orientation reversal remains searchable. The Tessar and Double Gauss
 forms are off-the-shelf approximations of their historical forms, not replicas
 of a particular patented prescription. The ordinary discrete mode remains
-available for unconstrained replacement within the current element count.
+available for unconstrained replacement within the current element count,
+while free-topology mode changes that count.
 
 ## Research basis
 
@@ -145,9 +160,9 @@ Primary references:
 
 Not yet implemented:
 
-- automatic element-count changes and unrestricted topology generation;
-- floating stop-location search, Pareto-front selection, checkpoints, and
-  pause/resume;
+- unrestricted prescription generation outside the filtered catalog pool;
+- automatic insertion of a dummy stop surface in empty air, Pareto-front
+  selection, checkpoints, and pause/resume;
 - MTF as a late-stage optimization operand;
 - manufacturing tolerance, relative illumination, and cost objectives.
 

@@ -54,7 +54,8 @@ class PlotWidget(QWidget):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "解析結果がありません")
             return
 
-        legend_width = 126 if self.series else 18
+        legend_items = [item for item in prepared if item.get("legend", True)]
+        legend_width = 126 if legend_items else 18
         left, top, bottom = 56.0, 31.0, 43.0
         available_width = max(self.width() - left - legend_width - 12.0, 40.0)
         available_height = max(self.height() - top - bottom, 40.0)
@@ -93,7 +94,7 @@ class PlotWidget(QWidget):
             painter.setPen(QPen(QColor("#59625f"), 1.0, Qt.PenStyle.DashLine))
             painter.drawEllipse(center, radius_x, radius_y)
         painter.restore()
-        self._draw_legend(painter, plot_rect.right() + 10, top, prepared)
+        self._draw_legend(painter, plot_rect.right() + 10, top, legend_items)
         painter.setPen(QColor("#3c4642"))
         painter.drawText(QRectF(plot_rect.left(), self.height() - 25, plot_rect.width(), 18), Qt.AlignmentFlag.AlignCenter, self.x_label)
         painter.save()

@@ -10,7 +10,7 @@ from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QContextMenuEvent, QMouseEvent
 from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QGraphicsSimpleTextItem
 
-from kirakiralens.domain import DesignSettings, OpticalDesign
+from kirakiralens.domain import DesignSettings, OpticalDesign, lens_element_from_dict
 from kirakiralens.optics.optiland_adapter import OptilandAdapter
 from kirakiralens.ui.automatic_design_window import AutomaticDesignWindow
 from kirakiralens.ui.main_window import MainWindow
@@ -26,6 +26,14 @@ def test_main_window_constructs_with_generated_catalog() -> None:
     assert window.repository.count_products() == 920
     assert window.design.settings.back_focus_target_mm == 45.46
     assert window.lens_view.scene().items()
+    assert window.calculate_button.text() == "光学計算"
+    calculation_requests = []
+    original_schedule_analysis = window.schedule_analysis
+    window.schedule_analysis = lambda force=False: calculation_requests.append(force)
+    window.calculate_button.click()
+    application.processEvents()
+    window.schedule_analysis = original_schedule_analysis
+    assert calculation_requests == [False]
 
     window._select("element", 0)
     assert window.inspector.surface_selector.count() == 2
@@ -348,6 +356,29 @@ def test_classic_search_builds_catalog_slots_and_candidate_preview() -> None:
     assert window.parts_table.rowCount() == 3
     assert window.candidate_preview.scene().items()
     assert not window.candidate_preview._gap_spins
+    window.shutdown()
+    window.close()
+    application.processEvents()
+
+
+def test_topology_search_builds_mixed_power_catalog_pool() -> None:
+    application = QApplication.instance() or QApplication([])
+    root = Path(__file__).resolve().parents[1]
+    window = AutomaticDesignWindow(OpticalDesign.starter(), root)
+    window.search_scope.setCurrentIndex(window.search_scope.findData("topology"))
+
+    options = window._options()
+    pool = window._topology_pool()
+
+    assert options["allow_element_count_search"] is True
+    assert options["allow_stop_search"] is True
+    assert options["minimum_element_count"] == 2
+    assert options["maximum_element_count"] == 5
+    powers = {window._element_power(lens_element_from_dict(item)) for item in pool}
+    assert len(pool) >= 2
+    assert powers == {"positive", "negative"}
+    assert "自由構成" in window.variable_count.text()
+
     window.shutdown()
     window.close()
     application.processEvents()

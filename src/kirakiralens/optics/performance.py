@@ -11,9 +11,9 @@ from .optiland_adapter import OptilandAdapter
 
 
 QUALITY_PRESETS = {
-    "preview": {"spot_rings": 6, "ray_points": 65, "curve_points": 33, "longitudinal_points": 33},
-    "standard": {"spot_rings": 10, "ray_points": 101, "curve_points": 51, "longitudinal_points": 51},
-    "high": {"spot_rings": 16, "ray_points": 161, "curve_points": 81, "longitudinal_points": 81},
+    "preview": {"spot_rings": 6, "ray_points": 65, "curve_points": 33, "longitudinal_points": 33, "grid_points": 9},
+    "standard": {"spot_rings": 10, "ray_points": 101, "curve_points": 51, "longitudinal_points": 51, "grid_points": 11},
+    "high": {"spot_rings": 16, "ray_points": 161, "curve_points": 81, "longitudinal_points": 81, "grid_points": 15},
 }
 
 
@@ -26,6 +26,7 @@ def normalized_options(options: dict[str, Any] | None = None, design: OpticalDes
             "ray_points": design.settings.ray_fan_point_count,
             "curve_points": design.settings.analysis_curve_point_count,
             "longitudinal_points": design.settings.analysis_curve_point_count,
+            "grid_points": 11,
         }
     else:
         if quality not in QUALITY_PRESETS:
@@ -34,9 +35,12 @@ def normalized_options(options: dict[str, Any] | None = None, design: OpticalDes
     if quality not in {*QUALITY_PRESETS, "design"}:
         quality = "standard"
     maximum_frequency = min(max(float(source.get("max_frequency_lp_mm", 80.0)), 20.0), 400.0)
-    for key in ("spot_rings", "ray_points", "curve_points", "longitudinal_points"):
+    for key in ("spot_rings", "ray_points", "curve_points", "longitudinal_points", "grid_points"):
         if key in source:
             values[key] = int(source[key])
+    values["grid_points"] = min(max(int(values["grid_points"]), 5), 31)
+    if values["grid_points"] % 2 == 0:
+        values["grid_points"] += 1
     values.update({"quality": quality, "max_frequency_lp_mm": maximum_frequency})
     return values
 
@@ -58,6 +62,8 @@ def evaluate_performance(design: OpticalDesign, options: dict[str, Any] | None =
         "longitudinal": {},
         "field_curvature": {},
         "distortion": {},
+        "distortion_grid": {},
+        "petzval": {},
         "summary": {},
         "warnings": [],
     }
@@ -132,6 +138,18 @@ def evaluate_performance(design: OpticalDesign, options: dict[str, Any] | None =
     result["distortion"] = run(
         "Distortion",
         lambda: _distortion(system, wavelengths, int(resolved["curve_points"])),
+    ) or {}
+    result["distortion_grid"] = run(
+        "Grid distortion",
+        lambda: _grid_distortion(
+            system,
+            design.settings.primary_wavelength_um,
+            int(resolved["grid_points"]),
+        ),
+    ) or {}
+    result["petzval"] = run(
+        "Petzval sum",
+        lambda: _petzval_sum(system, design.settings.primary_wavelength_um),
     ) or {}
     result["summary"] = _build_summary(result)
     result["valid"] = bool(result["spots"] and result["mtf"])
@@ -378,12 +396,98 @@ def _distortion(system, wavelengths, num_points):
     return {"field": _float_list(field), "series": series}
 
 
+def _grid_distortion(system, primary_wavelength, num_points):
+    import warnings
+
+    import optiland.backend as be
+    from optiland.analysis import GridDistortion
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        analysis = GridDistortion(
+            system,
+            wavelength=float(primary_wavelength),
+            num_points=int(num_points),
+            distortion_type="f-tan",
+        )
+    ideal_x = np.asarray(be.to_numpy(analysis.data["xp"]), dtype=float)
+    ideal_y = np.asarray(be.to_numpy(analysis.data["yp"]), dtype=float)
+    real_x = np.asarray(be.to_numpy(analysis.data["xr"]), dtype=float)
+    real_y = np.asarray(be.to_numpy(analysis.data["yr"]), dtype=float)
+    ideal_radius = np.hypot(ideal_x, ideal_y)
+    displacement = np.hypot(ideal_x - real_x, ideal_y - real_y)
+    valid = (
+        np.isfinite(ideal_radius)
+        & np.isfinite(displacement)
+        & np.isfinite(real_x)
+        & np.isfinite(real_y)
+        & (ideal_radius > 1e-12)
+    )
+    maximum_distortion = float(np.max(100.0 * displacement[valid] / ideal_radius[valid])) if np.any(valid) else None
+    maximum_displacement = float(np.max(displacement[valid])) if np.any(valid) else None
+    return {
+        "wavelength_um": float(primary_wavelength),
+        "grid_points": int(num_points),
+        "ideal_x_mm": _nested_float_list(ideal_x),
+        "ideal_y_mm": _nested_float_list(ideal_y),
+        "real_x_mm": _nested_float_list(real_x),
+        "real_y_mm": _nested_float_list(real_y),
+        "maximum_distortion_percent": maximum_distortion,
+        "maximum_displacement_mm": maximum_displacement,
+        "model": "f-tan chief-ray grid",
+    }
+
+
+def _petzval_sum(system, primary_wavelength):
+    import optiland.backend as be
+
+    indices = np.asarray(be.to_numpy(system.n(float(primary_wavelength))), dtype=float).ravel()
+    radii = np.asarray(be.to_numpy(system.surface_group.radii), dtype=float).ravel()
+    contributions = []
+    petzval_sum = 0.0
+    for surface_number in range(1, len(radii) - 1):
+        radius = float(radii[surface_number])
+        n_before = float(indices[surface_number - 1])
+        n_after = float(indices[surface_number])
+        contribution = 0.0
+        if np.isfinite(radius) and abs(radius) > 1e-12 and n_before > 0 and n_after > 0:
+            contribution = (n_after - n_before) / (radius * n_before * n_after)
+        petzval_sum += contribution
+        surface = system.surface_group.surfaces[surface_number]
+        contributions.append(
+            {
+                "surface_number": surface_number,
+                "comment": str(surface.comment),
+                "curvature_per_mm": float(contribution),
+            }
+        )
+    radius_mm = -1.0 / petzval_sum if abs(petzval_sum) > 1e-15 else None
+    transverse_sum = None
+    longitudinal_sum = None
+    try:
+        transverse_sum = float(be.sum(system.aberrations.TPC()))
+        longitudinal_sum = float(be.sum(system.aberrations.PC()))
+    except Exception:
+        pass
+    return {
+        "curvature_per_mm": float(petzval_sum),
+        "radius_mm": radius_mm,
+        "transverse_third_order_mm": transverse_sum,
+        "longitudinal_third_order_mm": longitudinal_sum,
+        "wavelength_um": float(primary_wavelength),
+        "surface_contributions": contributions,
+        "radius_convention": "R = -1 / Petzval sum",
+    }
+
+
 def _build_summary(result: dict[str, Any]) -> dict[str, Any]:
     mtf_fields = result.get("mtf", {}).get("fields", [])
     spot_fields = result.get("spots", {}).get("fields", [])
     fan_fields = result.get("ray_fan", {}).get("fields", [])
     field_series = result.get("field_curvature", {}).get("series", [])
     distortion_series = result.get("distortion", {}).get("series", [])
+    petzval = result.get("petzval", {})
+    distortion_grid = result.get("distortion_grid", {})
     mtf40_values = [direction
                     for field in mtf_fields
                     for direction in field.get("at", {}).get("40", {}).values()]
@@ -423,8 +527,19 @@ def _build_summary(result: dict[str, Any]) -> dict[str, Any]:
             "edge_astigmatism_mm": edge_astigmatism,
             "primary_longitudinal_spherical_um": result.get("longitudinal", {}).get("primary_lsa_um"),
             "axial_color_um": result.get("longitudinal", {}).get("axial_color_um"),
+            "petzval_sum_per_mm": petzval.get("curvature_per_mm"),
+            "petzval_radius_mm": petzval.get("radius_mm"),
+            "grid_max_distortion_percent": distortion_grid.get("maximum_distortion_percent"),
         },
     }
+
+
+def _nested_float_list(values) -> list[list[float | None]]:
+    array = np.asarray(values, dtype=float)
+    return [
+        [float(value) if np.isfinite(value) else None for value in row]
+        for row in array
+    ]
 
 
 def _valid_rays(x_values, y_values, intensity_values):
