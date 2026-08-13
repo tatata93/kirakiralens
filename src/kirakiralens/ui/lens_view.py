@@ -174,12 +174,39 @@ class LensLayoutView(QGraphicsView):
                 stop_surface_index = design.stop_surface_index
                 if stop_surface_index is None or not 0 <= stop_surface_index < len(element.surfaces):
                     stop_surface_index = len(element.surfaces) - 1
-                if element_index == design.stop_after_element and surface_index == stop_surface_index:
+                if (
+                    design.explicit_stop_after_element is None
+                    and element_index == design.stop_after_element
+                    and surface_index == stop_surface_index
+                ):
                     stop_pen = QPen(QColor("#b3423f"), 0)
                     stop_pen.setCosmetic(True)
                     stop_height = min(maximum_radius + 3, element.outer_diameter_mm / 2 + 4)
                     scene.addLine(z, -stop_height, z, -element.outer_diameter_mm / 2, stop_pen)
                     scene.addLine(z, element.outer_diameter_mm / 2, z, stop_height, stop_pen)
+
+            if design.explicit_stop_after_element == element_index:
+                offset = min(max(design.explicit_stop_offset_mm, 0.0), element.gap_after_mm)
+                stop_z = surface_z[-1] + offset
+                stop_pen = QPen(QColor("#b3423f"), 0)
+                stop_pen.setCosmetic(True)
+                opening = (
+                    self._analysis.entrance_pupil_diameter_mm / 2.0
+                    if self._analysis is not None
+                    and self._analysis.valid
+                    and self._analysis.entrance_pupil_diameter_mm is not None
+                    else element.outer_diameter_mm / 4.0
+                )
+                opening = min(max(opening, 1.0), element.outer_diameter_mm / 2.0)
+                stop_height = min(maximum_radius + 3, element.outer_diameter_mm / 2.0 + 4.0)
+                scene.addLine(stop_z, -stop_height, stop_z, -opening, stop_pen)
+                scene.addLine(stop_z, opening, stop_z, stop_height, stop_pen)
+                stop_label = QGraphicsSimpleTextItem("STOP")
+                stop_label.setBrush(QColor("#b3423f"))
+                stop_label.setScale(0.16)
+                stop_label.setPos(stop_z + 0.5, stop_height + 0.5)
+                stop_label.setZValue(5)
+                scene.addItem(stop_label)
 
             selected_element = self._selected and self._selected[1] == element_index
             if selected_element:

@@ -37,6 +37,8 @@ def analysis_signature(design: OpticalDesign, options: dict[str, Any] | None = N
         },
         "stop_after_element": design.stop_after_element,
         "stop_surface_index": design.stop_surface_index,
+        "explicit_stop_after_element": design.explicit_stop_after_element,
+        "explicit_stop_offset_mm": design.explicit_stop_offset_mm,
         "elements": [
             {
                 "outer_diameter_mm": element.outer_diameter_mm,
@@ -45,6 +47,8 @@ def analysis_signature(design: OpticalDesign, options: dict[str, Any] | None = N
                     {
                         "radius_mm": surface.radius_mm,
                         "material_after": surface.material_after,
+                        "refractive_index_d": surface.refractive_index_d,
+                        "abbe_number_d": surface.abbe_number_d,
                         "thickness_after_mm": surface.thickness_after_mm,
                         "clear_aperture_mm": surface.clear_aperture_mm,
                         "surface_type": surface.surface_type,

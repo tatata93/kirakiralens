@@ -218,17 +218,24 @@ def variable_candidates(design: OpticalDesign, options: dict[str, Any] | None = 
                             minimum = max(minimum, resolved["minimum_bfl_mm"])
                             maximum = min(maximum, resolved["maximum_bfl_mm"])
                     if maximum > minimum:
+                        explicit_stop_here = design.explicit_stop_after_element == element_index
+                        gap_surface_number = surface_number + 1 if explicit_stop_here else surface_number
+                        stop_offset = design.explicit_stop_offset_mm if explicit_stop_here else 0.0
+                        variable_minimum = max(minimum - stop_offset, 0.0)
+                        variable_maximum = max(maximum - stop_offset, variable_minimum + 1e-6)
                         candidates.append(
                             VariableCandidate(
                                 "image_gap" if is_image_plane else "air_gap",
                                 "像面位置" if is_image_plane else f"L{element_index + 1} 後方空気間隔",
                                 element_index,
                                 surface_index,
-                                surface_number,
-                                minimum,
-                                maximum,
+                                gap_surface_number,
+                                variable_minimum,
+                                variable_maximum,
                             )
                         )
+            surface_number += 1
+        if design.explicit_stop_after_element == element_index:
             surface_number += 1
     return candidates
 
@@ -670,7 +677,10 @@ def _longitudinal_satisfied(metrics: dict[str, float | None], options: dict[str,
 def _current_image_distance(design, candidates, problem) -> float:
     for candidate, variable in zip(candidates, problem.variables, strict=True):
         if candidate.kind == "image_gap":
-            return float(variable.variable.get_value())
+            value = float(variable.variable.get_value())
+            if design.explicit_stop_after_element == candidate.element_index:
+                value += design.explicit_stop_offset_mm
+            return value
     return design.elements[-1].gap_after_mm
 
 
@@ -692,6 +702,8 @@ def _apply_variables_to_design(design, candidates, problem) -> list[dict[str, An
             surface.thickness_after_mm = value
         else:
             old_value = element.gap_after_mm
+            if design.explicit_stop_after_element == candidate.element_index:
+                value += design.explicit_stop_offset_mm
             element.gap_after_mm = value
         changes.append({"label": candidate.label, "before": old_value, "after": value})
     return changes

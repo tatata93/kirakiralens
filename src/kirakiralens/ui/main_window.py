@@ -25,6 +25,7 @@ from ..catalog.database import CatalogRepository
 from ..catalog.edmund import default_paths, import_edmund_catalog
 from ..domain import LensElement, OpticalDesign, SurfaceSpec, new_id
 from ..optics.optiland_adapter import FirstOrderAnalysis
+from ..optics.reference_designs import build_reference_design
 from ..optics.signature import analysis_signature, design_signature
 from ..persistence import load_project, save_project
 from .analysis_controller import AnalysisController
@@ -49,6 +50,7 @@ class MainWindow(QMainWindow):
         self._performance_window = None
         self._system_settings_window = None
         self._automatic_design_window = None
+        self._reference_examples_window = None
         self._undo_stack: list[dict] = []
         self._redo_stack: list[dict] = []
         self._restoring_history = False
@@ -94,6 +96,9 @@ class MainWindow(QMainWindow):
         self.performance_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon), "性能評価", self)
         self.system_settings_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView), "像面・光線条件", self)
         self.automatic_design_action = QAction(style.standardIcon(QStyle.StandardPixmap.SP_MediaPlay), "自動設計", self)
+        self.reference_examples_action = QAction(
+            style.standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton), "特許実施例", self
+        )
         self.reset_view_action = QAction("全体表示", self)
         self.import_action = QAction("Edmund Excelを再取込", self)
         self._update_history_actions()
@@ -121,6 +126,7 @@ class MainWindow(QMainWindow):
             self.performance_action,
             self.system_settings_action,
             self.automatic_design_action,
+            self.reference_examples_action,
         ):
             toolbar.addAction(action)
         toolbar.addSeparator()
@@ -215,6 +221,7 @@ class MainWindow(QMainWindow):
                 self.performance_action,
                 self.system_settings_action,
                 self.automatic_design_action,
+                self.reference_examples_action,
                 self.reset_view_action,
             ]
         )
@@ -235,6 +242,7 @@ class MainWindow(QMainWindow):
         self.performance_action.triggered.connect(self.open_performance_window)
         self.system_settings_action.triggered.connect(self.open_system_settings)
         self.automatic_design_action.triggered.connect(self.open_automatic_design)
+        self.reference_examples_action.triggered.connect(self.open_reference_examples)
         self.reset_view_action.triggered.connect(self.lens_view.reset_view)
         self.import_action.triggered.connect(self.reimport_catalog)
         self.catalog_panel.productActivated.connect(self.insert_catalog_product)
@@ -377,6 +385,11 @@ class MainWindow(QMainWindow):
         self.design.elements.insert(index, element)
         if index <= self.design.stop_after_element:
             self.design.stop_after_element += 1
+        if (
+            self.design.explicit_stop_after_element is not None
+            and index <= self.design.explicit_stop_after_element
+        ):
+            self.design.explicit_stop_after_element += 1
 
     def reverse_element(self, element_index: int) -> None:
         if not 0 <= element_index < len(self.design.elements):
@@ -414,6 +427,11 @@ class MainWindow(QMainWindow):
         elif self.design.stop_after_element == element_index:
             self.design.stop_after_element = max(0, element_index - 1)
             self.design.stop_surface_index = None
+        if self.design.explicit_stop_after_element is not None:
+            if self.design.explicit_stop_after_element > element_index:
+                self.design.explicit_stop_after_element -= 1
+            elif self.design.explicit_stop_after_element == element_index:
+                self.design.explicit_stop_after_element = None
         if self.design.elements:
             self.design.stop_after_element = min(self.design.stop_after_element, len(self.design.elements) - 1)
             self.selected_element = min(element_index, len(self.design.elements) - 1)
@@ -437,6 +455,10 @@ class MainWindow(QMainWindow):
         element.gap_after_mm = max(element.gap_min_mm, gap_mm)
         if element.gap_max_mm is not None:
             element.gap_after_mm = min(element.gap_after_mm, element.gap_max_mm)
+        if self.design.explicit_stop_after_element == element_index:
+            self.design.explicit_stop_offset_mm = min(
+                self.design.explicit_stop_offset_mm, element.gap_after_mm
+            )
         if element_index == len(self.design.elements) - 1:
             self.design.settings.back_focus_target_mm = element.gap_after_mm
             self.design.settings.auto_focus_enabled = False
@@ -483,6 +505,7 @@ class MainWindow(QMainWindow):
                 self.design.stop_surface_index = (
                     surface_index if 0 <= surface_index < surface_count else surface_count - 1
                 )
+                self.design.explicit_stop_after_element = None
                 self._design_changed()
 
     def duplicate_element(self, element_index: int) -> None:
@@ -643,6 +666,8 @@ class MainWindow(QMainWindow):
             self._system_settings_window.set_design(self.design)
         if self._automatic_design_window is not None:
             self._automatic_design_window.set_design(self.design)
+        if self._reference_examples_window is not None:
+            self._reference_examples_window.set_state(self.design, self.current_analysis)
         if optical_change:
             self._analysis_debounce.start()
 
@@ -667,6 +692,8 @@ class MainWindow(QMainWindow):
             )
         else:
             self.statusBar().showMessage(f"解析失敗: {result.error}", 10000)
+        if self._reference_examples_window is not None:
+            self._reference_examples_window.set_state(self.design, result)
 
     def _apply_automatic_image_focus(self, result: FirstOrderAnalysis) -> bool:
         if (
@@ -737,6 +764,8 @@ class MainWindow(QMainWindow):
             self._system_settings_window.set_design(design)
         if self._automatic_design_window is not None:
             self._automatic_design_window.set_design(design)
+        if self._reference_examples_window is not None:
+            self._reference_examples_window.set_state(design, self.current_analysis)
         self._update_history_actions()
         self._analysis_debounce.start()
 
@@ -844,6 +873,28 @@ class MainWindow(QMainWindow):
         self._automatic_design_window.raise_()
         self._automatic_design_window.activateWindow()
 
+    def open_reference_examples(self) -> None:
+        if self._reference_examples_window is None:
+            from .reference_examples_window import ReferenceExamplesWindow
+
+            self._reference_examples_window = ReferenceExamplesWindow(
+                self.design, self.current_analysis, self
+            )
+            self._reference_examples_window.loadRequested.connect(self._load_reference_example)
+            self._reference_examples_window.calculateRequested.connect(
+                lambda: self.schedule_analysis(force=True)
+            )
+        else:
+            self._reference_examples_window.set_state(self.design, self.current_analysis)
+        self._reference_examples_window.show()
+        self._reference_examples_window.raise_()
+        self._reference_examples_window.activateWindow()
+
+    def _load_reference_example(self, key: str) -> None:
+        self._replace_design(build_reference_design(key))
+        self.schedule_analysis(force=True)
+        self.statusBar().showMessage("特許実施例を読み込みました", 5000)
+
     def _apply_automatic_design(self, optimized_design: OpticalDesign) -> None:
         previous = deepcopy(self.design.to_dict())
         self.design = optimized_design
@@ -861,4 +912,6 @@ class MainWindow(QMainWindow):
             self._system_settings_window.close()
         if self._automatic_design_window is not None:
             self._automatic_design_window.shutdown()
+        if self._reference_examples_window is not None:
+            self._reference_examples_window.close()
         super().closeEvent(event)

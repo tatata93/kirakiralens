@@ -609,6 +609,8 @@ class SurfaceTable(QTableWidget):
         "曲率半径",
         "次面まで",
         "面後の媒質",
+        "nD",
+        "vd",
         "有効径",
         "外径",
         "面形状",
@@ -634,6 +636,8 @@ class SurfaceTable(QTableWidget):
         COL_RADIUS,
         COL_DISTANCE,
         COL_MATERIAL,
+        COL_REFRACTIVE_INDEX,
+        COL_ABBE_NUMBER,
         COL_APERTURE,
         COL_DIAMETER,
         COL_SURFACE_TYPE,
@@ -664,6 +668,8 @@ class SurfaceTable(QTableWidget):
     PRESCRIPTION_COLUMNS = {
         COL_RADIUS,
         COL_MATERIAL,
+        COL_REFRACTIVE_INDEX,
+        COL_ABBE_NUMBER,
         COL_APERTURE,
         COL_DIAMETER,
         COL_SURFACE_TYPE,
@@ -692,7 +698,11 @@ class SurfaceTable(QTableWidget):
         self.design = design
         self.blockSignals(True)
         self._row_map.clear()
-        row_count = sum(len(element.surfaces) for element in design.elements) + 2
+        row_count = (
+            sum(len(element.surfaces) for element in design.elements)
+            + 2
+            + (1 if design.explicit_stop_after_element is not None else 0)
+        )
         self.setRowCount(row_count)
         self._row_map.append(("object", -1, -1))
         self._set_row(
@@ -721,8 +731,10 @@ class SurfaceTable(QTableWidget):
                     "レンズ面",
                     element.part_number or element.name,
                     "Plane" if surface.is_plane else f"{surface.radius_mm:.6g}",
-                    f"{element.gap_after_mm if is_last else surface.thickness_after_mm:.6g}",
+                    f"{design.explicit_stop_offset_mm if is_last and design.explicit_stop_after_element == element_index else element.gap_after_mm if is_last else surface.thickness_after_mm:.6g}",
                     surface.material_after,
+                    "" if surface.refractive_index_d is None else f"{surface.refractive_index_d:.8g}",
+                    "" if surface.abbe_number_d is None else f"{surface.abbe_number_d:.8g}",
                     "" if surface.clear_aperture_mm is None else f"{surface.clear_aperture_mm:.6g}",
                     f"{element.outer_diameter_mm:.6g}",
                     surface.surface_type,
@@ -730,7 +742,9 @@ class SurfaceTable(QTableWidget):
                     ", ".join(f"{value:.8g}" for value in surface.asphere_coefficients),
                     surface.coating,
                     surface.comment,
-                    element_index == design.stop_after_element and surface_index == stop_surface,
+                    design.explicit_stop_after_element is None
+                    and element_index == design.stop_after_element
+                    and surface_index == stop_surface,
                     surface.radius_locked,
                     element.gap_locked if is_last else surface.thickness_locked,
                     surface.material_locked,
@@ -744,6 +758,33 @@ class SurfaceTable(QTableWidget):
                 self._set_row(row, values, editable=editable)
                 row += 1
                 global_surface += 1
+                if is_last and design.explicit_stop_after_element == element_index:
+                    self._row_map.append(("explicit_stop", element_index, -1))
+                    remaining_gap = max(element.gap_after_mm - design.explicit_stop_offset_mm, 0.0)
+                    self._set_row(
+                        row,
+                        [
+                            str(global_surface),
+                            "絞り",
+                            "STOP",
+                            "Plane",
+                            f"{remaining_gap:.6g}",
+                            "air",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "standard",
+                            "0",
+                            "",
+                            "",
+                            "開口絞り",
+                            True,
+                        ],
+                        editable={self.COL_DISTANCE},
+                    )
+                    row += 1
+                    global_surface += 1
         self._row_map.append(("image", -1, -1))
         self._set_row(
             row,
@@ -752,6 +793,8 @@ class SurfaceTable(QTableWidget):
                 "像面",
                 "IMAGE",
                 "Plane",
+                "",
+                "",
                 "",
                 "",
                 "",
@@ -792,6 +835,8 @@ class SurfaceTable(QTableWidget):
                 self.COL_NUMBER,
                 self.COL_RADIUS,
                 self.COL_DISTANCE,
+                self.COL_REFRACTIVE_INDEX,
+                self.COL_ABBE_NUMBER,
                 self.COL_APERTURE,
                 self.COL_DIAMETER,
                 self.COL_CONIC,
@@ -833,6 +878,18 @@ class SurfaceTable(QTableWidget):
                 return
             self.designChanged.emit()
             return
+        if kind == "explicit_stop":
+            if item.column() != self.COL_DISTANCE:
+                return
+            element = self.design.elements[element_index]
+            try:
+                distance_after = min(max(float(item.text()), 0.0), element.gap_after_mm)
+            except ValueError:
+                self.set_design(self.design)
+                return
+            self.design.explicit_stop_offset_mm = element.gap_after_mm - distance_after
+            self.designChanged.emit()
+            return
         element = self.design.elements[element_index]
         is_last = surface_index == len(element.surfaces) - 1
         edits_catalog_prescription = item.column() in self.PRESCRIPTION_COLUMNS or (
@@ -847,7 +904,9 @@ class SurfaceTable(QTableWidget):
                 surface.radius_mm = None if item.text().strip().lower() in {"plane", "flat", "inf"} else float(item.text())
             elif item.column() == self.COL_DISTANCE:
                 value = max(0.0, float(item.text()))
-                if is_last:
+                if is_last and self.design.explicit_stop_after_element == element_index:
+                    self.design.explicit_stop_offset_mm = min(value, element.gap_after_mm)
+                elif is_last:
                     element.gap_after_mm = value
                     if element_index == len(self.design.elements) - 1:
                         self.design.settings.back_focus_target_mm = value
@@ -856,6 +915,16 @@ class SurfaceTable(QTableWidget):
                     surface.thickness_after_mm = value
             elif item.column() == self.COL_MATERIAL:
                 surface.material_after = item.text().strip() or "air"
+            elif item.column() == self.COL_REFRACTIVE_INDEX:
+                text = item.text().strip()
+                surface.refractive_index_d = None if not text else float(text)
+                if surface.refractive_index_d is not None and surface.refractive_index_d <= 1.0:
+                    raise ValueError("nD must be greater than one")
+            elif item.column() == self.COL_ABBE_NUMBER:
+                text = item.text().strip()
+                surface.abbe_number_d = None if not text else float(text)
+                if surface.abbe_number_d is not None and surface.abbe_number_d <= 0.0:
+                    raise ValueError("vd must be positive")
             elif item.column() == self.COL_APERTURE:
                 surface.clear_aperture_mm = max(0.0, float(item.text()))
             elif item.column() == self.COL_DIAMETER:
@@ -879,6 +948,7 @@ class SurfaceTable(QTableWidget):
                 if item.checkState() == Qt.CheckState.Checked:
                     self.design.stop_after_element = element_index
                     self.design.stop_surface_index = surface_index
+                    self.design.explicit_stop_after_element = None
             elif item.column() == self.COL_RADIUS_LOCK:
                 surface.radius_locked = item.checkState() == Qt.CheckState.Checked
             elif item.column() == self.COL_DISTANCE_LOCK:
@@ -929,5 +999,5 @@ class SurfaceTable(QTableWidget):
             kind, element_index, surface_index = self._row_map[row]
             if kind == "surface":
                 self.surfaceSelected.emit(element_index, surface_index)
-            else:
+            elif kind in {"object", "image"}:
                 self.imageSelected.emit()

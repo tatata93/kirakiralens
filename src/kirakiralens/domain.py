@@ -21,6 +21,8 @@ class SurfaceSpec:
     conic: float = 0.0
     asphere_coefficients: list[float] = field(default_factory=list)
     comment: str = ""
+    refractive_index_d: float | None = None
+    abbe_number_d: float | None = None
     radius_locked: bool = False
     thickness_locked: bool = False
     material_locked: bool = False
@@ -68,6 +70,12 @@ class LensElement:
             raise ValueError("Element orientation is locked")
         internal_media = [surface.material_after for surface in self.surfaces[:-1]]
         internal_thicknesses = [surface.thickness_after_mm for surface in self.surfaces[:-1]]
+        internal_indices = [surface.refractive_index_d for surface in self.surfaces[:-1]]
+        internal_abbe_numbers = [surface.abbe_number_d for surface in self.surfaces[:-1]]
+        reversed_media = list(reversed(internal_media))
+        reversed_thicknesses = list(reversed(internal_thicknesses))
+        reversed_indices = list(reversed(internal_indices))
+        reversed_abbe_numbers = list(reversed(internal_abbe_numbers))
         reversed_surfaces: list[SurfaceSpec] = []
         for index, source in enumerate(reversed(self.surfaces)):
             radius = None if source.is_plane else -float(source.radius_mm)
@@ -75,14 +83,16 @@ class LensElement:
             reversed_surfaces.append(
                 SurfaceSpec(
                     radius_mm=radius,
-                    material_after="air" if is_last else list(reversed(internal_media))[index],
-                    thickness_after_mm=0.0 if is_last else list(reversed(internal_thicknesses))[index],
+                    material_after="air" if is_last else reversed_media[index],
+                    thickness_after_mm=0.0 if is_last else reversed_thicknesses[index],
                     clear_aperture_mm=source.clear_aperture_mm,
                     coating=source.coating,
                     surface_type=source.surface_type,
                     conic=source.conic,
                     asphere_coefficients=[-coefficient for coefficient in source.asphere_coefficients],
                     comment=source.comment,
+                    refractive_index_d=None if is_last else reversed_indices[index],
+                    abbe_number_d=None if is_last else reversed_abbe_numbers[index],
                     radius_locked=source.radius_locked,
                     thickness_locked=source.thickness_locked,
                     material_locked=source.material_locked,
@@ -181,6 +191,9 @@ class OpticalDesign:
     elements: list[LensElement] = field(default_factory=list)
     stop_after_element: int = 0
     stop_surface_index: int | None = None
+    explicit_stop_after_element: int | None = None
+    explicit_stop_offset_mm: float = 0.0
+    reference_example_key: str = ""
     schema_version: int = 1
 
     @classmethod
@@ -245,6 +258,13 @@ class OpticalDesign:
             stop_surface_index=(
                 None if data.get("stop_surface_index") is None else int(data["stop_surface_index"])
             ),
+            explicit_stop_after_element=(
+                None
+                if data.get("explicit_stop_after_element") is None
+                else int(data["explicit_stop_after_element"])
+            ),
+            explicit_stop_offset_mm=float(data.get("explicit_stop_offset_mm", 0.0)),
+            reference_example_key=str(data.get("reference_example_key", "")),
             schema_version=int(data.get("schema_version", 1)),
         )
 

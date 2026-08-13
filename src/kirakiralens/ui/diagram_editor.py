@@ -93,6 +93,10 @@ class DiagramEditor(QFrame):
         self.surface_distance = _spin(0, 100_000)
         self.surface_material = QLineEdit()
         self.surface_material.setPlaceholderText("面後の媒質")
+        self.surface_nd = QLineEdit()
+        self.surface_nd.setPlaceholderText("空欄はガラスカタログ")
+        self.surface_vd = QLineEdit()
+        self.surface_vd.setPlaceholderText("空欄はガラスカタログ")
         self.surface_aperture = _spin(0, 10_000)
         self.surface_coating = QLineEdit()
         self.surface_coating.setPlaceholderText("コーティング")
@@ -128,6 +132,10 @@ class DiagramEditor(QFrame):
         grid.addWidget(self.surface_conic, 2, 3)
         grid.addWidget(self.surface_coefficients, 2, 4, 1, 2)
         grid.addWidget(self.surface_comment, 2, 6)
+        grid.addWidget(QLabel("屈折率 nD"), 3, 0)
+        grid.addWidget(self.surface_nd, 3, 1, 1, 2)
+        grid.addWidget(QLabel("アッベ数 vd"), 3, 3)
+        grid.addWidget(self.surface_vd, 3, 4, 1, 2)
 
         locks = QHBoxLayout()
         for control in (
@@ -142,7 +150,7 @@ class DiagramEditor(QFrame):
         ):
             locks.addWidget(control)
         locks.addStretch(1)
-        grid.addLayout(locks, 3, 0, 1, 7)
+        grid.addLayout(locks, 4, 0, 1, 7)
 
         actions = QHBoxLayout()
         add_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder)
@@ -156,7 +164,7 @@ class DiagramEditor(QFrame):
         for button in (self.surface_before, self.surface_after, self.surface_duplicate, self.surface_delete, self.surface_customize):
             actions.addWidget(button)
         actions.addStretch(1)
-        grid.addLayout(actions, 4, 0, 1, 7)
+        grid.addLayout(actions, 5, 0, 1, 7)
         return page
 
     def _build_element_page(self) -> QWidget:
@@ -237,6 +245,8 @@ class DiagramEditor(QFrame):
             self.surface_radius,
             self.surface_distance,
             self.surface_material,
+            self.surface_nd,
+            self.surface_vd,
             self.surface_aperture,
             self.surface_coating,
             self.surface_diameter,
@@ -320,8 +330,13 @@ class DiagramEditor(QFrame):
             self.face_selector.setVisible(True)
             self.surface_plane.setChecked(surface.is_plane)
             self.surface_radius.setValue(0 if surface.is_plane else float(surface.radius_mm))
-            self.surface_distance.setValue(element.gap_after_mm if is_last else surface.thickness_after_mm)
+            if is_last and self.design.explicit_stop_after_element == self.element_index:
+                self.surface_distance.setValue(self.design.explicit_stop_offset_mm)
+            else:
+                self.surface_distance.setValue(element.gap_after_mm if is_last else surface.thickness_after_mm)
             self.surface_material.setText(surface.material_after)
+            self.surface_nd.setText("" if surface.refractive_index_d is None else f"{surface.refractive_index_d:g}")
+            self.surface_vd.setText("" if surface.abbe_number_d is None else f"{surface.abbe_number_d:g}")
             self.surface_aperture.setValue(surface.clear_aperture_mm or 0)
             self.surface_coating.setText(surface.coating)
             self.surface_diameter.setValue(element.outer_diameter_mm)
@@ -349,6 +364,8 @@ class DiagramEditor(QFrame):
                 self.surface_plane,
                 self.surface_radius,
                 self.surface_material,
+                self.surface_nd,
+                self.surface_vd,
                 self.surface_aperture,
                 self.surface_coating,
                 self.surface_diameter,
@@ -440,9 +457,22 @@ class DiagramEditor(QFrame):
                 self.surface_coefficients.setStyleSheet("border: 1px solid #a13d3a;")
                 return
             self.surface_coefficients.setStyleSheet("")
+            try:
+                nd = float(self.surface_nd.text()) if self.surface_nd.text().strip() else None
+                vd = float(self.surface_vd.text()) if self.surface_vd.text().strip() else None
+                if (nd is None) != (vd is None) or (nd is not None and (nd <= 1.0 or vd <= 0.0)):
+                    raise ValueError
+            except ValueError:
+                self.surface_nd.setStyleSheet("border: 1px solid #a13d3a;")
+                self.surface_vd.setStyleSheet("border: 1px solid #a13d3a;")
+                return
+            self.surface_nd.setStyleSheet("")
+            self.surface_vd.setStyleSheet("")
             radius = self.surface_radius.value()
             surface.radius_mm = None if self.surface_plane.isChecked() else radius or 50.0
             surface.material_after = self.surface_material.text().strip() or "air"
+            surface.refractive_index_d = nd
+            surface.abbe_number_d = vd
             surface.clear_aperture_mm = self.surface_aperture.value()
             surface.coating = self.surface_coating.text().strip()
             surface.surface_type = str(self.surface_type.currentData())
@@ -457,10 +487,17 @@ class DiagramEditor(QFrame):
             surface.conic_locked = self.conic_lock.isChecked()
             surface.asphere_locked = self.asphere_lock.isChecked()
         if is_last:
-            distance_changed = abs(element.gap_after_mm - self.surface_distance.value()) > 1e-9
-            element.gap_after_mm = self.surface_distance.value()
+            explicit_stop_here = self.design.explicit_stop_after_element == self.element_index
+            old_distance = self.design.explicit_stop_offset_mm if explicit_stop_here else element.gap_after_mm
+            distance_changed = abs(old_distance - self.surface_distance.value()) > 1e-9
+            if explicit_stop_here:
+                self.design.explicit_stop_offset_mm = min(
+                    self.surface_distance.value(), element.gap_after_mm
+                )
+            else:
+                element.gap_after_mm = self.surface_distance.value()
             element.gap_locked = self.distance_lock.isChecked()
-            if self.element_index == len(self.design.elements) - 1:
+            if self.element_index == len(self.design.elements) - 1 and not explicit_stop_here:
                 self.design.settings.back_focus_target_mm = element.gap_after_mm
                 if distance_changed:
                     self.design.settings.auto_focus_enabled = False
@@ -470,6 +507,7 @@ class DiagramEditor(QFrame):
         if self.stop_surface.isChecked():
             self.design.stop_after_element = self.element_index
             self.design.stop_surface_index = self.surface_index
+            self.design.explicit_stop_after_element = None
         self.designChanged.emit()
 
     def _apply_element(self) -> None:
@@ -487,6 +525,7 @@ class DiagramEditor(QFrame):
         if self.element_stop.isChecked():
             self.design.stop_after_element = self.element_index
             self.design.stop_surface_index = len(element.surfaces) - 1
+            self.design.explicit_stop_after_element = None
         if self.element_index == len(self.design.elements) - 1:
             self.design.settings.back_focus_target_mm = element.gap_after_mm
             if gap_changed:
@@ -507,10 +546,15 @@ class DiagramEditor(QFrame):
         element.gap_after_mm = max(minimum, self.gap_value.value())
         if maximum is not None:
             element.gap_after_mm = min(element.gap_after_mm, maximum)
+        if self.design.explicit_stop_after_element == self.element_index:
+            self.design.explicit_stop_offset_mm = min(
+                self.design.explicit_stop_offset_mm, element.gap_after_mm
+            )
         element.gap_locked = self.gap_locked.isChecked()
         if self.gap_stop.isChecked():
             self.design.stop_after_element = self.element_index
             self.design.stop_surface_index = len(element.surfaces) - 1
+            self.design.explicit_stop_after_element = None
         if self.element_index == len(self.design.elements) - 1:
             self.design.settings.back_focus_target_mm = element.gap_after_mm
             if gap_changed:

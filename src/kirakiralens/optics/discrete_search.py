@@ -217,6 +217,7 @@ def _mutate(
     else:
         positions = _available_stop_positions(design)
         design.stop_after_element, design.stop_surface_index = random.choice(positions)
+        design.explicit_stop_after_element = None
     return True
 
 
@@ -242,6 +243,8 @@ def _insert_catalog_element(design: OpticalDesign, element: LensElement, index: 
     design.elements.insert(index, element)
     if index <= design.stop_after_element:
         design.stop_after_element += 1
+    if design.explicit_stop_after_element is not None and index <= design.explicit_stop_after_element:
+        design.explicit_stop_after_element += 1
 
 
 def _delete_element(design: OpticalDesign, index: int) -> None:
@@ -263,6 +266,11 @@ def _delete_element(design: OpticalDesign, index: int) -> None:
     elif design.stop_after_element == index:
         design.stop_after_element = max(0, index - 1)
         design.stop_surface_index = None
+    if design.explicit_stop_after_element is not None:
+        if design.explicit_stop_after_element > index:
+            design.explicit_stop_after_element -= 1
+        elif design.explicit_stop_after_element == index:
+            design.explicit_stop_after_element = None
     design.stop_after_element = min(design.stop_after_element, len(design.elements) - 1)
 
 

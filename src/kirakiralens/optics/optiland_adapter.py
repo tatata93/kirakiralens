@@ -44,7 +44,7 @@ class OptilandAdapter:
     """Translate the persistent domain model to the pinned Optiland API."""
 
     def to_optic(self, design: OpticalDesign) -> Any:
-        from optiland import optic, physical_apertures
+        from optiland import materials, optic, physical_apertures
 
         system = optic.Optic(design.name)
         object_distance = design.settings.object_distance_mm
@@ -57,9 +57,18 @@ class OptilandAdapter:
             for local_index, surface in enumerate(element.surfaces):
                 is_last = local_index == len(element.surfaces) - 1
                 thickness = element.gap_after_mm if is_last else surface.thickness_after_mm
-                material = MATERIAL_ALIASES.get(surface.material_after.strip(), surface.material_after.strip())
-                if not material:
-                    material = "air"
+                explicit_stop_here = is_last and design.explicit_stop_after_element == element_index
+                if explicit_stop_here:
+                    thickness = min(max(float(design.explicit_stop_offset_mm), 0.0), element.gap_after_mm)
+                material_name = surface.material_after.strip()
+                if surface.refractive_index_d is not None and surface.abbe_number_d is not None:
+                    material = materials.AbbeMaterial(
+                        float(surface.refractive_index_d),
+                        float(surface.abbe_number_d),
+                        model="polynomial",
+                    )
+                else:
+                    material = MATERIAL_ALIASES.get(material_name, material_name) or "air"
                 radius = inf if surface.is_plane else float(surface.radius_mm)
                 surface_type = surface.surface_type if surface.surface_type in {"standard", "even_asphere"} else "standard"
                 geometry_parameters: dict[str, Any] = {"radius": radius, "conic": float(surface.conic)}
@@ -74,12 +83,30 @@ class OptilandAdapter:
                     thickness=float(thickness),
                     surface_type=surface_type,
                     material=material,
-                    is_stop=(element_index == design.stop_after_element and local_index == stop_surface_index),
+                    is_stop=(
+                        design.explicit_stop_after_element is None
+                        and element_index == design.stop_after_element
+                        and local_index == stop_surface_index
+                    ),
                     comment=surface.comment or self._surface_comment(element.manufacturer, element.part_number, local_index),
                     aperture=physical_apertures.RadialAperture(r_max=float(clear_diameter) / 2.0),
                     **geometry_parameters,
                 )
                 surface_number += 1
+                if explicit_stop_here:
+                    remaining_gap = max(element.gap_after_mm - float(thickness), 0.0)
+                    system.add_surface(
+                        index=surface_number,
+                        radius=inf,
+                        thickness=remaining_gap,
+                        material="air",
+                        is_stop=True,
+                        comment="Aperture stop",
+                        aperture=physical_apertures.RadialAperture(
+                            r_max=float(design.settings.max_outer_diameter_mm) / 2.0
+                        ),
+                    )
+                    surface_number += 1
         system.add_surface(index=surface_number, comment="Image")
         system.set_aperture(aperture_type="imageFNO", value=design.settings.f_number_target)
         system.set_field_type(field_type="angle")
