@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import asdict
 from random import Random
 
 from kirakiralens.domain import OpticalDesign
 from kirakiralens.optics.automatic_design import normalized_automatic_options, run_automatic_design
-from kirakiralens.optics.discrete_search import _delete_element, _insert_catalog_element, _mutate
+from kirakiralens.optics.discrete_search import (
+    _delete_element,
+    _insert_catalog_element,
+    _mutate,
+    _score_design,
+    _split_element_with_catalog,
+)
 from kirakiralens.optics.longitudinal import longitudinal_aberration_metrics
 from kirakiralens.optics.optiland_adapter import OptilandAdapter
+from kirakiralens.optics.reference_designs import build_reference_design
 
 
 def test_discrete_design_accepts_numeric_f_number_and_minimum_bfl() -> None:
@@ -112,6 +120,8 @@ def test_topology_options_are_normalized() -> None:
             "allow_stop_search": True,
             "minimum_element_count": 5,
             "maximum_element_count": 2,
+            "allow_catalog_splitting": True,
+            "maximum_split_count": 99,
         }
     )
 
@@ -119,6 +129,87 @@ def test_topology_options_are_normalized() -> None:
     assert options["allow_stop_search"] is True
     assert options["minimum_element_count"] == 5
     assert options["maximum_element_count"] == 5
+    assert options["allow_catalog_splitting"] is True
+    assert options["maximum_split_count"] == 6
+
+
+def test_catalog_split_preserves_final_gap_and_moves_stop_with_group() -> None:
+    design = OpticalDesign.starter()
+    source = design.elements[0]
+    source.gap_after_mm = 4.5
+    source.gap_locked = True
+    first = deepcopy(source)
+    second = deepcopy(source)
+    for product_id, element in enumerate((first, second), 101):
+        element.is_catalog = True
+        element.catalog_product_id = product_id
+        element.manufacturer = "Test catalog"
+        element.part_number = f"P{product_id}"
+
+    _split_element_with_catalog(design, 0, [first, second])
+
+    assert len(design.elements) == 4
+    assert design.elements[0].gap_after_mm == 1.0
+    assert design.elements[0].gap_locked is False
+    assert design.elements[1].gap_after_mm == 4.5
+    assert design.elements[1].gap_locked is True
+    assert design.stop_after_element == 1
+    assert design.stop_surface_index is None
+
+
+def test_discrete_split_respects_maximum_lens_count_and_split_count() -> None:
+    design = OpticalDesign.starter()
+    positive = deepcopy(design.elements[0])
+    negative = deepcopy(design.elements[1])
+    for product_id, element in enumerate((positive, negative), 201):
+        element.is_catalog = True
+        element.catalog_product_id = product_id
+    pools = [[deepcopy(element)] for element in design.elements]
+    options = {
+        "allow_orientation_search": False,
+        "allow_order_search": False,
+        "allow_catalog_splitting": True,
+        "maximum_split_count": 2,
+        "maximum_element_count": 4,
+    }
+
+    changed = _mutate(design, pools, options, Random(4), [positive, negative])
+
+    assert changed is True
+    assert len(design.elements) == 4
+
+    blocked = OpticalDesign.starter()
+    changed = _mutate(
+        blocked,
+        [[deepcopy(element)] for element in blocked.elements],
+        {**options, "maximum_element_count": 3},
+        Random(4),
+        [positive, negative],
+    )
+    assert changed is False
+    assert len(blocked.elements) == 3
+
+
+def test_patent_rear_stop_keeps_image_distance_measured_from_last_lens() -> None:
+    design = build_reference_design("triplet-jph07168095a-ex1")
+    options = normalized_automatic_options(
+        {
+            "target_efl_mm": 100.0,
+            "target_f_number": 2.78,
+            "target_bfl_mm": 81.015,
+            "vary_image_plane": True,
+            "spot_rings": 2,
+            "longitudinal_weight": 0.0,
+            "distortion_weight": 0.0,
+        }
+    )
+
+    score, focused, metrics = _score_design(design, options)
+
+    assert score < 1e29
+    assert metrics["image_distance_mm"] > focused.explicit_stop_offset_mm
+    assert focused.elements[-1].gap_after_mm == metrics["image_distance_mm"]
+    assert abs(metrics["image_distance_mm"] - 81.0938) < 0.01
 
 
 def test_longitudinal_metric_traces_axis_rays_at_all_wavelengths() -> None:

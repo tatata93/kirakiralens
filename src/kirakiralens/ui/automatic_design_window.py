@@ -174,6 +174,12 @@ class AutomaticDesignWindow(QMainWindow):
         self.allow_order.setChecked(True)
         self.allow_stop_search = QCheckBox("絞り面を探索")
         self.allow_stop_search.setChecked(True)
+        self.allow_catalog_replacement = QCheckBox("特許・カスタムも市販品へ置換")
+        self.allow_catalog_replacement.setChecked(True)
+        self.maximum_split_count = QSpinBox()
+        self.maximum_split_count.setRange(1, 6)
+        self.maximum_split_count.setValue(2)
+        self.maximum_split_count.setToolTip("1つの元レンズを何個までの市販レンズに分けて置換するか")
         self.minimum_elements = QSpinBox()
         self.minimum_elements.setRange(1, 20)
         self.minimum_elements.setValue(max(1, len(self.design.elements) - 1))
@@ -197,11 +203,15 @@ class AutomaticDesignWindow(QMainWindow):
         discrete_grid.addWidget(QLabel("MTF詳細評価案"), 3, 2)
         discrete_grid.addWidget(self.mtf_screen_count, 3, 3)
         discrete_grid.addWidget(self.allow_stop_search, 3, 0, 1, 2)
-        discrete_grid.addWidget(QLabel("部品数範囲"), 4, 0)
+        discrete_grid.addWidget(QLabel("使用レンズ数"), 4, 0)
         discrete_grid.addWidget(self.minimum_elements, 4, 1)
         discrete_grid.addWidget(QLabel("～"), 4, 2)
         discrete_grid.addWidget(self.maximum_elements, 4, 3)
+        discrete_grid.addWidget(self.allow_catalog_replacement, 5, 0, 1, 2)
+        discrete_grid.addWidget(QLabel("1レンズの最大分割数"), 5, 2)
+        discrete_grid.addWidget(self.maximum_split_count, 5, 3)
         self.search_scope.currentIndexChanged.connect(self._search_scope_changed)
+        self.maximum_split_count.valueChanged.connect(self._search_scope_changed)
 
         variable_group = QGroupBox("連続最適化で変更する値")
         variable_layout = QHBoxLayout(variable_group)
@@ -295,6 +305,9 @@ class AutomaticDesignWindow(QMainWindow):
         self.apply_button.clicked.connect(self._apply_best)
         self.minimum_elements.valueChanged.connect(self._refresh_variable_count)
         self.maximum_elements.valueChanged.connect(self._refresh_variable_count)
+        self.maximum_split_count.valueChanged.connect(self._refresh_variable_count)
+        self.allow_catalog_replacement.toggled.connect(self._refresh_variable_count)
+        self.allow_catalog_replacement.toggled.connect(self._search_scope_changed)
         controls.addWidget(self.start_button)
         controls.addWidget(self.stop_button)
         controls.addWidget(self.apply_button)
@@ -433,7 +446,10 @@ class AutomaticDesignWindow(QMainWindow):
         self.target_bfl.setValue(design.settings.back_focus_target_mm)
         self.minimum_bfl.setValue(design.settings.back_focus_target_mm)
         self.minimum_elements.setValue(min(self.minimum_elements.value(), len(design.elements)))
-        self.maximum_elements.setValue(max(self.maximum_elements.value(), len(design.elements)))
+        split_headroom = 1 if self.maximum_split_count.value() > 1 else 0
+        self.maximum_elements.setValue(
+            max(self.maximum_elements.value(), len(design.elements) + split_headroom)
+        )
         self.best_design = None
         self.candidate_payloads = []
         self.candidate_table.setRowCount(0)
@@ -484,6 +500,13 @@ class AutomaticDesignWindow(QMainWindow):
                 "allow_order_search": self.allow_order.isChecked() and self.search_scope.currentData() in {"discrete", "topology"},
                 "allow_element_count_search": self.search_scope.currentData() == "topology",
                 "allow_stop_search": self.allow_stop_search.isChecked() and self.search_scope.currentData() == "topology",
+                "allow_catalog_replacement": self.allow_catalog_replacement.isChecked(),
+                "allow_catalog_splitting": (
+                    self.search_scope.currentData() in {"discrete", "topology"}
+                    and self.allow_catalog_replacement.isChecked()
+                    and self.maximum_split_count.value() > 1
+                ),
+                "maximum_split_count": self.maximum_split_count.value(),
                 "minimum_element_count": self.minimum_elements.value(),
                 "maximum_element_count": self.maximum_elements.value(),
             }
@@ -508,7 +531,12 @@ class AutomaticDesignWindow(QMainWindow):
         self.allow_order.setEnabled(mode in {"discrete", "topology"})
         self.allow_stop_search.setEnabled(mode == "topology")
         self.minimum_elements.setEnabled(mode == "topology")
-        self.maximum_elements.setEnabled(mode == "topology")
+        split_enabled = mode in {"discrete", "topology"} and self.maximum_split_count.value() > 1
+        self.maximum_elements.setEnabled(mode == "topology" or split_enabled)
+        self.allow_catalog_replacement.setEnabled(mode in {"discrete", "topology"})
+        self.maximum_split_count.setEnabled(
+            mode in {"discrete", "topology"} and self.allow_catalog_replacement.isChecked()
+        )
         self._refresh_variable_count()
 
     def _candidate_pool(self) -> list[list[dict]]:
@@ -516,10 +544,14 @@ class AutomaticDesignWindow(QMainWindow):
             pool, _ = self._classic_candidate_payload()
             return pool
         pool: list[list[dict]] = []
-        minimum_aperture = self.target_efl.value() / max(self.target_f_number.value(), 0.5)
+        minimum_aperture = max(
+            5.0,
+            0.4 * self.target_efl.value() / max(self.target_f_number.value(), 0.5),
+        )
         for element in self.design.elements:
             candidates = [deepcopy(element)]
-            if not element.element_locked:
+            replaceable = element.is_catalog or self.allow_catalog_replacement.isChecked()
+            if not element.element_locked and replaceable:
                 maximum_diameter = self.design.settings.max_outer_diameter_mm
                 if element.diameter_max_mm is not None:
                     maximum_diameter = min(maximum_diameter, element.diameter_max_mm)
@@ -547,7 +579,10 @@ class AutomaticDesignWindow(QMainWindow):
         return pool
 
     def _topology_pool(self) -> list[dict]:
-        minimum_aperture = self.target_efl.value() / max(self.target_f_number.value(), 0.5)
+        minimum_aperture = max(
+            5.0,
+            0.4 * self.target_efl.value() / max(self.target_f_number.value(), 0.5),
+        )
         maximum_diameter = self.design.settings.max_outer_diameter_mm
         manufacturer = str(self.manufacturer.currentData())
         products = []
@@ -649,7 +684,13 @@ class AutomaticDesignWindow(QMainWindow):
             self.variable_count.setText(f"{form.label} / {len(form.slots)}部品 / 離散+連続")
         elif mode == "topology":
             self.variable_count.setText(
-                f"自由構成 {self.minimum_elements.value()}～{self.maximum_elements.value()}部品 / 離散+連続"
+                f"自由構成 {self.minimum_elements.value()}～{self.maximum_elements.value()}レンズ / "
+                f"最大{self.maximum_split_count.value()}分割 / 離散+連続"
+            )
+        elif mode == "discrete" and self.maximum_split_count.value() > 1:
+            self.variable_count.setText(
+                f"市販品置換 / 最大{self.maximum_elements.value()}レンズ / "
+                f"1位置{self.maximum_split_count.value()}分割"
             )
         else:
             self.variable_count.setText(f"連続 {count} 個" + (" / 離散あり" if mode == "discrete" else ""))
@@ -678,6 +719,8 @@ class AutomaticDesignWindow(QMainWindow):
                     options["topology_pool"] = self._topology_pool()
                 else:
                     options["candidate_pool"] = self._candidate_pool()
+                    if options["allow_catalog_splitting"]:
+                        options["topology_pool"] = self._topology_pool()
             except (KeyError, TypeError, ValueError) as exc:
                 self.status.setText(str(exc))
                 return

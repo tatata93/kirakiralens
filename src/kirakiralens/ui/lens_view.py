@@ -739,6 +739,7 @@ class LensLayoutView(QGraphicsView):
 
         duplicate_action = menu.addAction("レンズを複製")
         reverse_action = menu.addAction("レンズを反転")
+        replace_catalog_action = menu.addAction("選択中のカタログレンズに置換")
         stop_action = menu.addAction("この面を絞り位置にする" if kind == "surface" else "後方を絞り位置にする")
         customize_action = None
         if self._design is not None and self._design.elements[element_index].is_catalog:
@@ -750,6 +751,9 @@ class LensLayoutView(QGraphicsView):
         delete_action = menu.addAction("レンズを削除")
         duplicate_action.triggered.connect(lambda: self.surfaceActionRequested.emit("element_duplicate", element_index, surface_index))
         reverse_action.triggered.connect(lambda: self.elementActionRequested.emit("reverse", element_index))
+        replace_catalog_action.triggered.connect(
+            lambda: self.elementActionRequested.emit("replace_catalog", element_index)
+        )
         stop_target = surface_index if kind == "surface" else -1
         stop_action.triggered.connect(lambda: self.surfaceActionRequested.emit("set_stop", element_index, stop_target))
         if customize_action is not None:

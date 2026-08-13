@@ -346,6 +346,59 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{element.manufacturer} {element.part_number} を追加しました", 4000)
         self._design_changed()
 
+    def replace_with_selected_catalog_product(self, element_index: int) -> None:
+        if not 0 <= element_index < len(self.design.elements):
+            return
+        product_id = self.catalog_panel.selected_product_id() or self._selected_catalog_product
+        if product_id is None:
+            self.statusBar().showMessage("左のカタログで置換先のレンズを選択してください", 5000)
+            return
+        try:
+            replacement = self.repository.element_from_product(product_id)
+        except (KeyError, TypeError, ValueError) as exc:
+            QMessageBox.warning(self, "カタログ", str(exc))
+            return
+        previous = self.design.elements[element_index]
+        maximum_diameter = self.design.settings.max_outer_diameter_mm
+        if previous.diameter_max_mm is not None:
+            maximum_diameter = min(maximum_diameter, previous.diameter_max_mm)
+        if replacement.outer_diameter_mm > maximum_diameter:
+            QMessageBox.warning(self, "径制約", "この部品は指定された最大径を超えています。")
+            return
+        if (
+            previous.diameter_min_mm is not None
+            and replacement.outer_diameter_mm < previous.diameter_min_mm
+        ):
+            QMessageBox.warning(self, "径制約", "この部品は指定された最小径を下回っています。")
+            return
+
+        replacement.id = previous.id
+        replacement.gap_after_mm = previous.gap_after_mm
+        replacement.gap_locked = previous.gap_locked
+        replacement.gap_min_mm = previous.gap_min_mm
+        replacement.gap_max_mm = previous.gap_max_mm
+        replacement.diameter_min_mm = previous.diameter_min_mm
+        replacement.diameter_max_mm = previous.diameter_max_mm
+        replacement.element_locked = previous.element_locked
+        replacement.orientation_locked = previous.orientation_locked
+        self.design.elements[element_index] = replacement
+        if self.design.stop_after_element == element_index and self.design.stop_surface_index is not None:
+            self.design.stop_surface_index = min(
+                self.design.stop_surface_index, len(replacement.surfaces) - 1
+            )
+        if self.design.explicit_stop_after_element == element_index:
+            self.design.explicit_stop_offset_mm = min(
+                self.design.explicit_stop_offset_mm, replacement.gap_after_mm
+            )
+        self.selected_element = element_index
+        self.selected_surface = 0
+        self.selected_kind = "surface"
+        self.statusBar().showMessage(
+            f"L{element_index + 1}を {replacement.manufacturer} {replacement.part_number} に置換しました",
+            5000,
+        )
+        self._design_changed()
+
     def _insertion_requested(self, kind: str, insertion_index: int) -> None:
         if kind == "catalog":
             product_id = self.catalog_panel.selected_product_id() or self._selected_catalog_product
@@ -473,6 +526,8 @@ class MainWindow(QMainWindow):
             self.reverse_element(element_index)
         elif action == "customize":
             self.customize_element(element_index)
+        elif action == "replace_catalog":
+            self.replace_with_selected_catalog_product(element_index)
 
     def _diagram_action_requested(self, action: str, element_index: int, surface_index: int) -> None:
         if action in {"delete", "reverse", "customize"}:

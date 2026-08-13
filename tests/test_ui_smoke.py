@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QGraphicsSimpleTextI
 
 from kirakiralens.domain import DesignSettings, OpticalDesign, lens_element_from_dict
 from kirakiralens.optics.optiland_adapter import OptilandAdapter
+from kirakiralens.optics.reference_designs import build_reference_design
 from kirakiralens.ui.automatic_design_window import AutomaticDesignWindow
 from kirakiralens.ui.main_window import MainWindow
 
@@ -145,7 +146,20 @@ def test_main_window_constructs_with_generated_catalog() -> None:
     )
     window.lens_view.contextMenuEvent(element_event)
     assert window.selected_kind == "element"
-    window.lens_view._context_menu.close()
+    element_menu = window.lens_view._context_menu
+    replace_action = next(
+        action
+        for action in element_menu.actions()
+        if action.text() == "選択中のカタログレンズに置換"
+    )
+    replacement_product = window.repository.query_products(limit=1)[0]
+    original_gap = window.design.elements[2].gap_after_mm
+    window._catalog_selected(replacement_product.id)
+    replace_action.trigger()
+    application.processEvents()
+    assert window.design.elements[2].catalog_product_id == replacement_product.id
+    assert window.design.elements[2].gap_after_mm == original_gap
+    element_menu.close()
 
     window.set_gap_after_element(0, 12.5)
     assert window.design.elements[0].gap_after_mm == 12.5
@@ -388,6 +402,36 @@ def test_topology_search_builds_mixed_power_catalog_pool() -> None:
     assert powers == {"positive", "negative"}
     assert "自由構成" in window.variable_count.text()
 
+    window.shutdown()
+    window.close()
+    application.processEvents()
+
+
+def test_patent_examples_can_be_replaced_and_split_with_catalog_lenses() -> None:
+    application = QApplication.instance() or QApplication([])
+    root = Path(__file__).resolve().parents[1]
+    design = build_reference_design("double-gauss-jps54104334a-ex1")
+    window = AutomaticDesignWindow(design, root)
+    window.search_scope.setCurrentIndex(window.search_scope.findData("discrete"))
+    window.maximum_elements.setValue(8)
+    window.maximum_split_count.setValue(3)
+
+    options = window._options()
+    pool = window._candidate_pool()
+
+    assert options["allow_catalog_replacement"] is True
+    assert options["allow_catalog_splitting"] is True
+    assert options["maximum_element_count"] == 8
+    assert options["maximum_split_count"] == 3
+    assert all(len(slot) > 1 for slot in pool)
+    assert all(any(item["is_catalog"] for item in slot[1:]) for slot in pool)
+    assert "最大8レンズ" in window.variable_count.text()
+    assert "3分割" in window.variable_count.text()
+
+    window.allow_catalog_replacement.setChecked(False)
+    pool = window._candidate_pool()
+    assert all(len(slot) == 1 for slot in pool)
+    assert window._options()["allow_catalog_splitting"] is False
     window.shutdown()
     window.close()
     application.processEvents()

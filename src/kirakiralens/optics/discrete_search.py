@@ -122,11 +122,20 @@ def _mutate(
 ) -> bool:
     topology_pool = topology_pool or []
     topology_search = bool(options.get("allow_element_count_search"))
+    catalog_pool = _unique_catalog_elements(
+        topology_pool or [candidate for slot in pools for candidate in slot]
+    )
     replacements: dict[int, list[LensElement]] = {}
     for index, element in enumerate(design.elements):
-        if element.element_locked:
+        if element.element_locked or (
+            not element.is_catalog and not options.get("allow_catalog_replacement", True)
+        ):
             continue
-        source_pool = topology_pool if topology_search else (pools[index] if index < len(pools) else [])
+        source_pool = (
+            topology_pool
+            if topology_search
+            else _replacement_pool_for_element(element, pools, catalog_pool)
+        )
         alternatives = [candidate for candidate in source_pool if _element_identity(candidate) != _element_identity(element)]
         if alternatives:
             replacements[index] = alternatives
@@ -159,6 +168,19 @@ def _mutate(
             )
         )
     ]
+    maximum_elements = options.get("maximum_element_count", 8)
+    maximum_split = min(
+        options.get("maximum_split_count", 1),
+        maximum_elements - len(design.elements) + 1,
+    )
+    splittable = [
+        index
+        for index, element in enumerate(design.elements)
+        if not element.element_locked
+        and not element.is_catalog
+        and maximum_split >= 2
+        and any(_same_power(element, candidate) for candidate in catalog_pool)
+    ]
     actions: list[str] = []
     if replaceable:
         actions.extend(["replace", "replace"])
@@ -175,6 +197,8 @@ def _mutate(
         actions.extend(["insert", "insert"])
     if topology_search and len(design.elements) > options.get("minimum_element_count", 1) and deletable:
         actions.append("delete")
+    if options.get("allow_catalog_splitting", False) and splittable:
+        actions.extend(["split", "split"])
     if options.get("allow_stop_search", False) and _available_stop_positions(design):
         actions.append("stop")
     if not actions:
@@ -214,11 +238,92 @@ def _mutate(
         _insert_catalog_element(design, deepcopy(random.choice(topology_pool)), random.choice(insertable))
     elif action == "delete":
         _delete_element(design, random.choice(deletable))
+    elif action == "split":
+        index = random.choice(splittable)
+        source = design.elements[index]
+        candidates = [candidate for candidate in catalog_pool if _same_power(source, candidate)]
+        split_count = random.randint(2, maximum_split)
+        selected = [deepcopy(random.choice(candidates)) for _ in range(split_count)]
+        _split_element_with_catalog(design, index, selected)
     else:
         positions = _available_stop_positions(design)
         design.stop_after_element, design.stop_surface_index = random.choice(positions)
         design.explicit_stop_after_element = None
     return True
+
+
+def _replacement_pool_for_element(
+    element: LensElement,
+    pools: list[list[LensElement]],
+    catalog_pool: list[LensElement],
+) -> list[LensElement]:
+    identity = _element_identity(element)
+    for slot in pools:
+        if any(_element_identity(candidate) == identity for candidate in slot):
+            return slot
+    return [candidate for candidate in catalog_pool if _same_power(element, candidate)]
+
+
+def _unique_catalog_elements(elements: list[LensElement]) -> list[LensElement]:
+    output: list[LensElement] = []
+    seen: set[tuple[object, ...]] = set()
+    for element in elements:
+        if not element.is_catalog:
+            continue
+        identity = _element_identity(element)
+        if identity in seen:
+            continue
+        output.append(element)
+        seen.add(identity)
+    return output
+
+
+def _same_power(first: LensElement, second: LensElement) -> bool:
+    return _power_class(first) == _power_class(second)
+
+
+def _power_class(element: LensElement) -> str:
+    shape = element.shape.lower()
+    return "negative" if "concave" in shape or "negative" in shape or shape in {"pcv", "dcv"} else "positive"
+
+
+def _split_element_with_catalog(
+    design: OpticalDesign,
+    index: int,
+    replacements: list[LensElement],
+) -> None:
+    if not 0 <= index < len(design.elements) or len(replacements) < 2:
+        raise ValueError("A split needs one source element and at least two replacements")
+    old = design.elements[index]
+    old_gap = _gap_state(old)
+    split_elements: list[LensElement] = []
+    for split_index, candidate in enumerate(replacements):
+        candidate.id = old.id if split_index == len(replacements) - 1 else new_id()
+        candidate.element_locked = False
+        candidate.orientation_locked = False
+        candidate.diameter_min_mm = old.diameter_min_mm
+        candidate.diameter_max_mm = old.diameter_max_mm
+        if split_index == len(replacements) - 1:
+            _set_gap_state(candidate, old_gap)
+        else:
+            candidate.gap_after_mm = 1.0
+            candidate.gap_locked = False
+            candidate.gap_min_mm = 0.0
+            candidate.gap_max_mm = None
+        split_elements.append(candidate)
+
+    delta = len(split_elements) - 1
+    design.elements[index : index + 1] = split_elements
+    if design.stop_after_element > index:
+        design.stop_after_element += delta
+    elif design.stop_after_element == index:
+        design.stop_after_element = index + delta
+        design.stop_surface_index = None
+    if design.explicit_stop_after_element is not None:
+        if design.explicit_stop_after_element > index:
+            design.explicit_stop_after_element += delta
+        elif design.explicit_stop_after_element == index:
+            design.explicit_stop_after_element = index + delta
 
 
 def _insert_catalog_element(design: OpticalDesign, element: LensElement, index: int) -> None:
@@ -315,7 +420,10 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
     design.settings.focal_length_target_mm = options["target_efl_mm"]
     design.settings.f_number_target = options["target_f_number"]
     try:
-        if options.get("allow_element_count_search") and not (
+        if (
+            options.get("allow_element_count_search")
+            or options.get("allow_catalog_splitting")
+        ) and not (
             options["minimum_element_count"] <= len(design.elements) <= options["maximum_element_count"]
         ):
             raise ValueError("element count constraint violated")
@@ -331,11 +439,20 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
         ):
             system.image_solve()
             image_distance = max(0.0, float(system.surface_group.surfaces[-2].thickness))
+            explicit_stop_before_image = (
+                design.explicit_stop_after_element == len(design.elements) - 1
+            )
+            if explicit_stop_before_image:
+                image_distance += design.explicit_stop_offset_mm
             final_element = design.elements[-1]
             image_distance = max(final_element.gap_min_mm, image_distance)
             if final_element.gap_max_mm is not None:
                 image_distance = min(final_element.gap_max_mm, image_distance)
-            system.surface_group.surfaces[-2].thickness = image_distance
+            system.surface_group.surfaces[-2].thickness = max(
+                image_distance
+                - (design.explicit_stop_offset_mm if explicit_stop_before_image else 0.0),
+                0.0,
+            )
             system.update()
             design.elements[-1].gap_after_mm = image_distance
         else:

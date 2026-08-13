@@ -65,6 +65,9 @@ DEFAULT_AUTOMATIC_OPTIONS: dict[str, Any] = {
     "allow_order_search": True,
     "allow_element_count_search": False,
     "allow_stop_search": False,
+    "allow_catalog_replacement": True,
+    "allow_catalog_splitting": False,
+    "maximum_split_count": 1,
     "minimum_element_count": 1,
     "maximum_element_count": 8,
     "candidate_pool": [],
@@ -105,6 +108,7 @@ def normalized_automatic_options(options: dict[str, Any] | None = None) -> dict[
     result["discrete_beam_width"] = min(max(int(result["discrete_beam_width"]), 1), 100)
     result["result_count"] = min(max(int(result["result_count"]), 1), 50)
     result["mtf_screen_count"] = min(max(int(result["mtf_screen_count"]), 0), result["result_count"])
+    result["maximum_split_count"] = min(max(int(result["maximum_split_count"]), 1), 6)
     result["minimum_element_count"] = min(max(int(result["minimum_element_count"]), 1), 20)
     result["maximum_element_count"] = min(
         max(int(result["maximum_element_count"]), result["minimum_element_count"]),
@@ -135,6 +139,8 @@ def normalized_automatic_options(options: dict[str, Any] | None = None) -> dict[
         "allow_order_search",
         "allow_element_count_search",
         "allow_stop_search",
+        "allow_catalog_replacement",
+        "allow_catalog_splitting",
     ):
         result[key] = bool(result[key])
     return result
