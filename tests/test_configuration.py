@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from kirakiralens.domain import DesignSettings, OpticalDesign
-from kirakiralens.optics.automatic_design import variable_candidates
+from kirakiralens.optics.automatic_design import normalized_automatic_options, variable_candidates
 from kirakiralens.optics.configuration import resolved_field_angles, sensor_angle_of_view
 
 
@@ -54,3 +54,13 @@ def test_numeric_minimum_bfl_expands_the_automatic_image_bound() -> None:
     image_candidate = next(candidate for candidate in candidates if candidate.kind == "image_gap")
 
     assert image_candidate.maximum >= 250.5
+
+
+def test_total_track_constraint_is_normalized() -> None:
+    options = normalized_automatic_options(
+        {"maximum_total_track_mm": 80.0, "track_tolerance_mm": 0.25, "track_hard": True}
+    )
+
+    assert options["maximum_total_track_mm"] == 80.0
+    assert options["track_tolerance_mm"] == 0.25
+    assert options["track_hard"] is True

@@ -33,8 +33,9 @@ class LensLayoutView(QGraphicsView):
     surfaceActionRequested = Signal(str, int, int)
     imageEditRequested = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, editable: bool = True):
         super().__init__(parent)
+        self._editable = editable
         self.setScene(QGraphicsScene(self))
         self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
@@ -97,7 +98,8 @@ class LensLayoutView(QGraphicsView):
         axis_pen.setCosmetic(True)
         scene.addLine(-5, 0, image_z + 5, 0, axis_pen)
 
-        self._draw_front_insertion(geometry[0][0], maximum_radius)
+        if self._editable:
+            self._draw_front_insertion(geometry[0][0], maximum_radius)
         self._draw_rays(design)
         colors = [QColor("#75b7c7"), QColor("#83b98c"), QColor("#d8ae62"), QColor("#9fa9d0")]
         for element_index, (element, surface_z) in enumerate(zip(design.elements, geometry, strict=True)):
@@ -274,13 +276,16 @@ class LensLayoutView(QGraphicsView):
         self.scene().addLine(start, y, end, y, pen)
         self.scene().addLine(start, y - 1, start, y + 1, pen)
         self.scene().addLine(end, y - 1, end, y + 1, pen)
-        self._add_gap_spin(
-            len(design.elements) - 1,
-            start,
-            end,
-            y,
-            prefix="BFL ",
-        )
+        if self._editable:
+            self._add_gap_spin(
+                len(design.elements) - 1,
+                start,
+                end,
+                y,
+                prefix="BFL ",
+            )
+        else:
+            self._add_dimension_label(f"BFL {design.elements[-1].gap_after_mm:.2f}", start, end, y)
 
     def _draw_gap_dimension(self, element_index: int, start: float, end: float, y: float) -> None:
         selected = self._selected == ("gap", element_index, -1)
@@ -293,7 +298,10 @@ class LensLayoutView(QGraphicsView):
             self.scene().addLine(end, y - 0.8, end, y + 0.8, pen),
         ):
             line.setZValue(2)
-        self._add_gap_spin(element_index, start, end, y)
+        if self._editable:
+            self._add_gap_spin(element_index, start, end, y)
+        elif self._design is not None:
+            self._add_dimension_label(f"{self._design.elements[element_index].gap_after_mm:.2f}", start, end, y)
         hit_item = QGraphicsRectItem(QRectF(start, y - 1.5, max(end - start, 0.8), 3.0))
         hit_item.setPen(QPen(Qt.PenStyle.NoPen))
         hit_item.setBrush(QColor(0, 0, 0, 1))
@@ -304,6 +312,14 @@ class LensLayoutView(QGraphicsView):
         hit_item.setCursor(Qt.CursorShape.SizeHorCursor)
         hit_item.setZValue(6)
         self.scene().addItem(hit_item)
+
+    def _add_dimension_label(self, text: str, start: float, end: float, y: float) -> None:
+        label = QGraphicsSimpleTextItem(text)
+        label.setBrush(QColor("#59625f"))
+        label.setScale(0.16)
+        label.setPos((start + end) / 2.0 - max(len(text), 3) * 0.35, y - 1.2)
+        label.setZValue(5)
+        self.scene().addItem(label)
 
     def _draw_front_insertion(self, first_surface_z: float, maximum_radius: float) -> None:
         rect = QGraphicsRectItem(QRectF(first_surface_z - 8.0, -maximum_radius, 6.0, 2 * maximum_radius))
@@ -461,6 +477,9 @@ class LensLayoutView(QGraphicsView):
         return f"{element.name}\n{identity}\nDiameter {element.outer_diameter_mm:.2f} mm"
 
     def mousePressEvent(self, event) -> None:
+        if not self._editable:
+            QGraphicsView.mousePressEvent(self, event)
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             item = self._interactive_item_at(event.position().toPoint())
             if item is not None:
@@ -484,6 +503,9 @@ class LensLayoutView(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
+        if not self._editable:
+            QGraphicsView.mouseMoveEvent(self, event)
+            return
         if self._gap_drag is not None and self._design is not None:
             element_index, initial_value, start_x = self._gap_drag
             element = self._design.elements[element_index]
@@ -498,6 +520,9 @@ class LensLayoutView(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if not self._editable:
+            QGraphicsView.mouseReleaseEvent(self, event)
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._gap_drag is not None:
             element_index, initial_value, _ = self._gap_drag
             value = self._gap_preview_value
@@ -509,6 +534,9 @@ class LensLayoutView(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event) -> None:
+        if not self._editable:
+            event.ignore()
+            return
         item = self._interactive_item_at(event.pos())
         if item is None:
             super().contextMenuEvent(event)

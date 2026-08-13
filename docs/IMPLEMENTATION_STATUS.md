@@ -54,10 +54,19 @@ Verified working:
   clear aperture, EFL, power sign, wavelength, and photographic relevance.
 - A dedicated automatic-design window runs cancellable, budgeted mixed
   optimization. It accepts numeric EFL/tolerance, image F-number, and
-  target/minimum/range BFL conditions; EFL and BFL can be required constraints.
+  target/minimum/range BFL conditions plus an optional maximum total track;
+  EFL, BFL, and total track can be required constraints.
   Its discrete stage searches catalog replacements, orientation, and order with
   a bounded beam, then passes the best prescription to Optiland/SciPy continuous
   optimization of unlocked custom radii/thicknesses, air gaps, and image plane.
+- Classical-form mode creates catalog-only Cooke Triplet, Tessar, and six-
+  singlet Double Gauss approximations from explicit component-count, power,
+  shape, and stop-adjacency rules. It does not depend on the current design's
+  element count.
+- Up to 50 retained candidates are compared in a dedicated tab. Selecting a row
+  updates a read-only lens layout and bill of materials; any selected candidate
+  can be applied. The top configured candidates receive additional weighted
+  polychromatic MTF screening at 40 lp/mm.
 
 ## Edmund catalog result
 
@@ -86,6 +95,7 @@ workbook. They are deliberately not designable. See
 - `src/kirakiralens/optics/performance_process.py`: isolated performance worker.
 - `src/kirakiralens/optics/automatic_design.py`: locks, variables, normalized merit, and optimization.
 - `src/kirakiralens/optics/discrete_search.py`: catalog substitution, orientation, and order beam search.
+- `src/kirakiralens/optics/classic_forms.py`: Triplet, Tessar, and Double Gauss template rules and seed construction.
 - `src/kirakiralens/optics/automatic_design_process.py`: isolated optimization worker.
 - `src/kirakiralens/optics/paraxial.py`: ray paths using indices returned by Optiland.
 - `src/kirakiralens/ui/analysis_controller.py`: debouncing and process lifecycle.
@@ -106,7 +116,7 @@ Run:
 .\.venv\Scripts\python.exe -m kirakiralens
 ```
 
-The current suite has twenty-two passing tests. A Windows-rendered 1500 x 900 capture
+The current suite has twenty-six passing tests. A Windows-rendered 1500 x 900 capture
 is stored at `docs/images/main-window.png` and has been checked for text clipping
 and incoherent overlap.
 
@@ -116,9 +126,8 @@ The next work should finish Phase 3 and expand Phase 4's discrete catalog search
 
 Not yet implemented:
 
-- Hard limits for image-quality metrics beyond EFL/BFL, stop-position
-  optimization, checkpoints, pause, and multi-candidate/Pareto comparison.
-- Triplet, Tessar, and Double Gauss catalog searches.
+- Hard limits for image-quality metrics beyond EFL/BFL, floating stop-position
+  optimization, checkpoints, pause, and Pareto-front selection.
 - Element-count-changing free-topology discrete-continuous search.
 - PSF, relative-illumination, through-focus, and tolerance analysis views.
 - `.seq`, `.len`, and `.zmx` exchange.

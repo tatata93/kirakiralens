@@ -36,6 +36,7 @@ DEFAULT_AUTOMATIC_OPTIONS: dict[str, Any] = {
     "bfl_weight": 2.0,
     "spot_weight": 10.0,
     "distortion_weight": 1.0,
+    "track_weight": 1.0,
     "spot_rings": 5,
     "seed": 1,
     "target_efl_mm": None,
@@ -48,12 +49,19 @@ DEFAULT_AUTOMATIC_OPTIONS: dict[str, Any] = {
     "maximum_bfl_mm": 1000.0,
     "bfl_tolerance_mm": 0.5,
     "bfl_hard": False,
+    "maximum_total_track_mm": None,
+    "track_tolerance_mm": 1.0,
+    "track_hard": False,
     "discrete_search": False,
     "discrete_evaluations": 80,
     "discrete_beam_width": 6,
+    "result_count": 10,
+    "mtf_screen_count": 3,
     "allow_orientation_search": True,
     "allow_order_search": True,
     "candidate_pool": [],
+    "classic_form": "",
+    "classic_seed_design": None,
 }
 
 
@@ -72,11 +80,21 @@ def normalized_automatic_options(options: dict[str, Any] | None = None) -> dict[
     result["maximum_bfl_mm"] = max(float(result["maximum_bfl_mm"]), result["minimum_bfl_mm"])
     result["efl_tolerance_mm"] = max(float(result["efl_tolerance_mm"]), 1e-3)
     result["bfl_tolerance_mm"] = max(float(result["bfl_tolerance_mm"]), 1e-3)
+    result["maximum_total_track_mm"] = (
+        None
+        if result["maximum_total_track_mm"] in {None, 0, 0.0}
+        else max(float(result["maximum_total_track_mm"]), 0.1)
+    )
+    result["track_tolerance_mm"] = max(float(result["track_tolerance_mm"]), 1e-3)
     if result["bfl_constraint"] not in {"off", "target", "minimum", "range"}:
         result["bfl_constraint"] = "target"
     result["discrete_evaluations"] = min(max(int(result["discrete_evaluations"]), 1), 100000)
     result["discrete_beam_width"] = min(max(int(result["discrete_beam_width"]), 1), 100)
-    for key in ("efl_weight", "bfl_weight", "spot_weight", "distortion_weight"):
+    result["result_count"] = min(max(int(result["result_count"]), 1), 50)
+    result["mtf_screen_count"] = min(max(int(result["mtf_screen_count"]), 0), result["result_count"])
+    if result["classic_form"] not in {"", "triplet", "tessar", "double_gauss"}:
+        result["classic_form"] = ""
+    for key in ("efl_weight", "bfl_weight", "spot_weight", "distortion_weight", "track_weight"):
         result[key] = min(max(float(result[key]), 0.0), 1000.0)
     for key in (
         "vary_radii",
@@ -85,6 +103,7 @@ def normalized_automatic_options(options: dict[str, Any] | None = None) -> dict[
         "vary_image_plane",
         "efl_hard",
         "bfl_hard",
+        "track_hard",
         "discrete_search",
         "allow_orientation_search",
         "allow_order_search",
@@ -203,7 +222,7 @@ def run_automatic_design(
     deadline = overall_start + resolved["time_limit_seconds"]
     design = deepcopy(source_design)
     if not design.elements:
-        return {"valid": False, "error": "探索するレンズがありません", "options": resolved}
+        return {"valid": False, "error": "探索するレンズがありません", "options": _public_options(resolved)}
     target_efl = resolved["target_efl_mm"] or design.settings.focal_length_target_mm
     target_f_number = resolved["target_f_number"] or design.settings.f_number_target
     target_bfl = resolved["target_bfl_mm"]
@@ -215,18 +234,36 @@ def run_automatic_design(
     design.settings.focal_length_target_mm = target_efl
     design.settings.f_number_target = target_f_number
     source_image_distance = design.elements[-1].gap_after_mm if design.elements else None
+    if resolved["classic_form"]:
+        seed_data = resolved.get("classic_seed_design")
+        if not isinstance(seed_data, dict):
+            return {"valid": False, "error": "古典型の初期構成がありません", "options": _public_options(resolved)}
+        design = OpticalDesign.from_dict(seed_data)
+        design.settings.focal_length_target_mm = target_efl
+        design.settings.f_number_target = target_f_number
     discrete_result: dict[str, Any] | None = None
     if resolved["discrete_search"]:
         from .discrete_search import run_discrete_search
 
         discrete_result = run_discrete_search(design, resolved, deadline, progress)
         if not discrete_result.get("valid"):
-            return {**discrete_result, "options": resolved}
+            return {**discrete_result, "options": _public_options(resolved)}
         design = discrete_result["design"]
     candidates = variable_candidates(design, resolved)
     if not candidates:
         if discrete_result is None:
-            return {"valid": False, "error": "変更可能な変数がありません", "options": resolved}
+            return {"valid": False, "error": "変更可能な変数がありません", "options": _public_options(resolved)}
+        if not discrete_result.get("constraints_satisfied", True):
+            return {
+                "valid": False,
+                "error": "必須にした焦点距離、バックフォーカス、または全長条件を満たす構成が見つかりませんでした",
+                "evaluations": discrete_result.get("evaluations", 0),
+                "best_score": discrete_result.get("best_score"),
+                "metrics": discrete_result.get("metrics", {}),
+                "options": _public_options(resolved),
+                "candidates": discrete_result.get("candidates", []),
+                "topology": discrete_result.get("topology"),
+            }
         if source_image_distance is not None and abs(design.elements[-1].gap_after_mm - source_image_distance) > 1e-9:
             design.settings.auto_focus_enabled = False
         return {
@@ -239,10 +276,12 @@ def run_automatic_design(
             "variables": [],
             "changes": discrete_result.get("changes", []),
             "metrics": discrete_result.get("metrics", {}),
-            "options": resolved,
+            "options": _public_options(resolved),
             "method": "カタログ離散ビーム探索",
             "targets": _target_summary(resolved),
             "discrete": _discrete_summary(discrete_result),
+            "candidates": discrete_result.get("candidates", []),
+            "topology": discrete_result.get("topology"),
         }
 
     system = OptilandAdapter().to_optic(design)
@@ -335,11 +374,15 @@ def run_automatic_design(
             score = float(problem.sum_squared())
             image_distance = _current_image_distance(design, candidates, problem)
             score += _back_focus_penalty(image_distance, resolved)
+            total_track = _current_total_track(system)
+            score += _track_penalty(total_track, resolved)
             efl = float(system.paraxial.f2())
             if resolved["efl_hard"] and abs(efl - target_efl) > resolved["efl_tolerance_mm"]:
                 score += 1e6 * ((abs(efl - target_efl) / resolved["efl_tolerance_mm"]) ** 2)
             if resolved["bfl_hard"] and not _back_focus_satisfied(image_distance, resolved):
                 score += 1e6 * max(_back_focus_violation(image_distance, resolved), 1.0) ** 2
+            if resolved["track_hard"] and not _track_satisfied(total_track, resolved):
+                score += 1e6 * max(_track_violation(total_track, resolved), 1.0) ** 2
             if not np.isfinite(score):
                 score = 1e30
         except Exception:
@@ -362,6 +405,7 @@ def run_automatic_design(
 
     if monotonic() >= deadline:
         initial_score = float(problem.sum_squared()) + _back_focus_penalty(design.elements[-1].gap_after_mm, resolved)
+        initial_score += _track_penalty(_current_total_track(system), resolved)
         best_score = initial_score
     else:
         initial_score = objective(x0)
@@ -409,7 +453,9 @@ def run_automatic_design(
     constraints_satisfied = (
         (not resolved["efl_hard"] or abs(float(system.paraxial.f2()) - target_efl) <= resolved["efl_tolerance_mm"])
         and (not resolved["bfl_hard"] or _back_focus_satisfied(design.elements[-1].gap_after_mm, resolved))
+        and (not resolved["track_hard"] or _track_satisfied(_current_total_track(system), resolved))
     )
+    ranked_candidates = _optimized_candidate_list(discrete_result, design, best_score, metrics, resolved)
     return {
         "valid": np.isfinite(best_score) and best_score < 1e29 and constraints_satisfied,
         "constraints_satisfied": constraints_satisfied,
@@ -421,13 +467,15 @@ def run_automatic_design(
         "variables": [asdict(candidate) for candidate in candidates],
         "changes": changes,
         "metrics": metrics,
-        "options": resolved,
+        "options": _public_options(resolved),
         "method": (
             ("カタログ離散ビーム探索 + " if discrete_result else "")
             + ("Optiland実光線 / SciPy Powell" if resolved["method"] == "local" else "Optiland実光線 / SciPy differential evolution")
         ),
         "targets": _target_summary(resolved),
         "discrete": _discrete_summary(discrete_result),
+        "candidates": ranked_candidates,
+        "topology": discrete_result.get("topology") if discrete_result else None,
     }
 
 
@@ -446,13 +494,60 @@ def _target_summary(options: dict[str, Any]) -> dict[str, Any]:
         "target_bfl_mm": options["target_bfl_mm"],
         "minimum_bfl_mm": options["minimum_bfl_mm"],
         "maximum_bfl_mm": options["maximum_bfl_mm"],
+        "maximum_total_track_mm": options["maximum_total_track_mm"],
     }
 
 
 def _discrete_summary(result: dict[str, Any] | None) -> dict[str, Any] | None:
     if result is None:
         return None
-    return {key: value for key, value in result.items() if key != "design"}
+    return {key: value for key, value in result.items() if key not in {"design", "candidates"}}
+
+
+def _public_options(options: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in options.items() if key not in {"candidate_pool", "classic_seed_design"}}
+
+
+def _optimized_candidate_list(
+    discrete_result: dict[str, Any] | None,
+    design: OpticalDesign,
+    score: float,
+    metrics: dict[str, float | None],
+    options: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if discrete_result is None:
+        return []
+    candidates = list(discrete_result.get("candidates", []))
+    optimized = {
+        "rank": 1,
+        "stage": "continuous_optimized",
+        "score": score,
+        "design": design.to_dict(),
+        "metrics": metrics,
+        "topology": discrete_result.get("topology"),
+        "constraints_satisfied": True,
+        "parts": _parts_summary(design),
+    }
+    result = [optimized, *candidates[1: options["result_count"]]]
+    for rank, candidate in enumerate(result, 1):
+        candidate["rank"] = rank
+    return result
+
+
+def _parts_summary(design: OpticalDesign) -> list[dict[str, Any]]:
+    return [
+        {
+            "position": index + 1,
+            "manufacturer": element.manufacturer,
+            "part_number": element.part_number,
+            "name": element.name,
+            "shape": element.shape,
+            "orientation_reversed": element.orientation_reversed,
+            "diameter_mm": element.outer_diameter_mm,
+            "gap_after_mm": element.gap_after_mm,
+        }
+        for index, element in enumerate(design.elements)
+    ]
 
 
 def _back_focus_violation(image_distance: float, options: dict[str, Any]) -> float:
@@ -487,11 +582,31 @@ def _back_focus_satisfied(image_distance: float, options: dict[str, Any]) -> boo
     return True
 
 
+def _track_violation(total_track_mm: float, options: dict[str, Any]) -> float:
+    maximum = options["maximum_total_track_mm"]
+    if maximum is None:
+        return 0.0
+    return max(0.0, total_track_mm - maximum) / options["track_tolerance_mm"]
+
+
+def _track_penalty(total_track_mm: float, options: dict[str, Any]) -> float:
+    return options["track_weight"] * _track_violation(total_track_mm, options) ** 2
+
+
+def _track_satisfied(total_track_mm: float, options: dict[str, Any]) -> bool:
+    maximum = options["maximum_total_track_mm"]
+    return maximum is None or total_track_mm <= maximum
+
+
 def _current_image_distance(design, candidates, problem) -> float:
     for candidate, variable in zip(candidates, problem.variables, strict=True):
         if candidate.kind == "image_gap":
             return float(variable.variable.get_value())
     return design.elements[-1].gap_after_mm
+
+
+def _current_total_track(system) -> float:
+    return sum(float(surface.thickness) for surface in system.surface_group.surfaces[1:-1])
 
 
 def _apply_variables_to_design(design, candidates, problem) -> list[dict[str, Any]]:
@@ -520,11 +635,39 @@ def _final_metrics(system, problem, spot_operand_indices, design) -> dict[str, f
             spot_values.append(float(problem.operands[index].value) * 1000.0)
         except Exception:
             pass
+    edge_distortion = None
+    mtf40_min = None
+    try:
+        from optiland.analysis import Distortion
+
+        distortion = Distortion(
+            system,
+            wavelengths=[design.settings.primary_wavelength_um],
+            num_points=5,
+            distortion_type="f-tan",
+        )
+        edge_distortion = float(np.asarray(distortion.data, dtype=float).ravel()[-1])
+    except Exception:
+        pass
+    try:
+        from .performance import minimum_polychromatic_mtf
+
+        mtf40_min = minimum_polychromatic_mtf(system, design, 40.0, 3)
+    except Exception:
+        pass
+    total_track = sum(
+        element.gap_after_mm + sum(surface.thickness_after_mm for surface in element.surfaces[:-1])
+        for element in design.elements
+    )
     return {
         "effective_focal_length_mm": float(system.paraxial.f2()),
         "image_f_number": float(system.paraxial.FNO()),
         "image_distance_mm": design.elements[-1].gap_after_mm,
         "maximum_rms_spot_um": max(spot_values, default=None),
+        "mtf40_min": mtf40_min,
+        "edge_distortion_percent": edge_distortion,
+        "total_track_mm": total_track,
+        "maximum_outer_diameter_mm": max((element.outer_diameter_mm for element in design.elements), default=None),
         "diffraction_airy_radius_um": 1.22
         * design.settings.primary_wavelength_um
         * design.settings.f_number_target,

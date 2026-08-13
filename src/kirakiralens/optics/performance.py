@@ -138,6 +138,31 @@ def evaluate_performance(design: OpticalDesign, options: dict[str, Any] | None =
     return result
 
 
+def minimum_polychromatic_mtf(system, design: OpticalDesign, frequency_lp_mm: float = 40.0, rings: int = 3) -> float:
+    fields = [tuple(map(float, field)) for field in system.fields.get_field_coords()]
+    wavelengths = [float(value) for value in system.wavelengths.get_wavelengths()]
+    _, mtf = _spot_and_mtf(
+        system,
+        fields,
+        wavelengths,
+        design.settings.primary_wavelength_um,
+        max(int(rings), 2),
+        max(float(frequency_lp_mm), 40.0),
+        11,
+        design.settings.wavelength_weights,
+        resolved_field_angles(design.settings),
+    )
+    key = str(int(frequency_lp_mm))
+    values = [
+        direction
+        for field in mtf["fields"]
+        for direction in field.get("at", {}).get(key, {}).values()
+    ]
+    if not values:
+        raise ValueError(f"MTF {frequency_lp_mm:g} lp/mm could not be evaluated")
+    return float(min(values))
+
+
 def _spot_and_mtf(
     system,
     fields,

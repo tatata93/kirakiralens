@@ -21,6 +21,9 @@ The current milestone includes:
   longitudinal aberration, field curvature, and distortion;
 - cancellable mixed discrete/continuous automatic design with numeric EFL,
   F-number, and target/minimum/range BFL goals;
+- catalog-based Cooke Triplet, Tessar, and Double Gauss template searches with
+  ranked candidate comparison, layout previews, bills of materials, and
+  late-stage 40 lp/mm MTF screening;
 - a complete editable surface table covering every lens surface, object, image
   size, apertures, aspheres, stop assignment, and optimization locks.
 

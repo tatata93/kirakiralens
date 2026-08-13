@@ -7,11 +7,11 @@ pipeline. It runs in a separate process, has time and evaluation budgets,
 reports progress, can be cancelled, preserves the best valid point found, and
 does not modify the design until the user applies that result.
 
-The user enters an effective focal length and tolerance, image F-number, and a
-BFL condition. BFL can be unconstrained, a target with tolerance, a minimum, or
-a range. Effective focal length and BFL may independently be marked required;
-a result outside a required condition is rejected instead of merely receiving
-a low ranking.
+The user enters an effective focal length and tolerance, image F-number, a BFL
+condition, and an optional maximum total track. BFL can be unconstrained, a
+target with tolerance, a minimum, or a range. Effective focal length, BFL, and
+total track may be marked required; a result outside a required condition is
+rejected instead of merely receiving a low ranking.
 
 ## Merit function
 
@@ -22,6 +22,7 @@ The optimizer uses Optiland real-ray operands with explicit normalization:
 - RMS spot radius at every configured field and wavelength divided by the
   primary-wavelength Airy radius;
 - chief-ray image-height error divided by a 2% distortion scale.
+- excess total track divided by its normalization tolerance.
 
 The field and wavelength weights configured in the image/ray window are
 normalized before use. The four merit groups have independent adjustable
@@ -72,9 +73,34 @@ starting point for the regular continuous optimization of unlocked air gaps and
 custom prescription variables. Catalog prescriptions themselves are never
 continuously deformed.
 
+The highest-ranked discrete candidates receive an additional weighted
+polychromatic 40 lp/mm MTF screening. The application retains up to 50 ranked
+candidates and shows score, constraint state, EFL, F-number, BFL, RMS spot,
+MTF40, distortion, total track, layout, and bill of materials. The first row is
+the continuously optimized best discrete candidate; remaining rows are clearly
+marked as coarse discrete evaluations and can also be applied to the editor.
+
 When the optimizer varies the image plane, the accepted result is switched to
 manual image positioning so the editor's ordinary paraxial auto-focus does not
 overwrite the optimized real-ray focus.
+
+## Classical forms
+
+Classical-form mode replaces the current element count with a selected form and
+constructs a catalog pool for every constrained position:
+
+- Cooke Triplet: positive singlet / negative singlet / positive singlet;
+- Tessar: positive singlet / negative singlet / positive cemented achromatic
+  doublet, giving four glass lenses in three components;
+- Double Gauss: positive / positive / negative, stop, negative / positive /
+  positive, implemented as six catalog singlets.
+
+The form rules constrain component count, power sign, catalog shape, and the
+surface adjacent to the nominal stop. Reordering is disabled in this mode,
+while orientation reversal remains searchable. The Tessar and Double Gauss
+forms are off-the-shelf approximations of their historical forms, not replicas
+of a particular patented prescription. The ordinary discrete mode remains
+available for unconstrained replacement within the current element count.
 
 ## Research basis
 
@@ -110,6 +136,9 @@ Primary references:
 - [Optiland quick start and image solve](https://optiland.readthedocs.io/en/latest/quickstart.html)
 - [Optiland image F-number aperture](https://optiland.readthedocs.io/en/latest/_modules/optiland/aperture/image_fno.html)
 - [Lens Factory: Automatic Lens Generation Using Off-the-shelf Components](https://www.microsoft.com/en-us/research/publication/lens-factory-automatic-lens-generation-using-off-shelf-components/)
+- [US540132A: Cooke Triplet photographic lens](https://patents.google.com/patent/US540132A/en)
+- [US721240A: Rudolph four-lens photographic objective](https://patents.google.com/patent/US721240A/en)
+- [US20050185301A1: Modified Double Gauss photographic objective](https://patents.google.com/patent/US20050185301A1/en)
 - [US20090002835A1: Method for lens performance optimization using electronic aberration correction](https://patents.google.com/patent/US20090002835)
 
 ## Deliberate limits
@@ -117,8 +146,8 @@ Primary references:
 Not yet implemented:
 
 - automatic element-count changes and unrestricted topology generation;
-- Triplet, Tessar, and Double Gauss topology rules;
-- stop-location search, Pareto candidate comparison, checkpoints, pause/resume;
+- floating stop-location search, Pareto-front selection, checkpoints, and
+  pause/resume;
 - MTF as a late-stage optimization operand;
 - manufacturing tolerance, relative illumination, and cost objectives.
 

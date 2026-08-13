@@ -10,8 +10,10 @@ from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QContextMenuEvent, QMouseEvent
 from PySide6.QtWidgets import QApplication, QDoubleSpinBox
 
-from kirakiralens.ui.main_window import MainWindow
+from kirakiralens.domain import OpticalDesign
 from kirakiralens.optics.optiland_adapter import OptilandAdapter
+from kirakiralens.ui.automatic_design_window import AutomaticDesignWindow
+from kirakiralens.ui.main_window import MainWindow
 
 
 def test_main_window_constructs_with_generated_catalog() -> None:
@@ -267,5 +269,55 @@ def test_front_insertion_and_diagram_gap_spin_box() -> None:
     application.processEvents()
     assert window.design.elements[0].gap_after_mm == original_gap + 0.1
 
+    window.close()
+    application.processEvents()
+
+
+def test_classic_search_builds_catalog_slots_and_candidate_preview() -> None:
+    application = QApplication.instance() or QApplication([])
+    root = Path(__file__).resolve().parents[1]
+    window = AutomaticDesignWindow(OpticalDesign.starter(), root)
+    window.search_scope.setCurrentIndex(window.search_scope.findData("classic"))
+    window.classic_form.setCurrentIndex(window.classic_form.findData("tessar"))
+    window.track_limit_enabled.setChecked(True)
+    window.maximum_total_track.setValue(90.0)
+
+    assert window._options()["maximum_total_track_mm"] == 90.0
+    assert window._options()["track_hard"] is True
+
+    pool, seed = window._classic_candidate_payload()
+
+    assert [len(slot) for slot in pool] == [8, 8, 8]
+    assert seed.elements[0].shape in {"double_convex", "plano_convex"}
+    assert seed.elements[1].shape in {"double_concave", "plano_concave"}
+    assert seed.elements[2].shape == "achromatic_doublet"
+    assert seed.stop_after_element == 1
+
+    payload = {
+        "rank": 1,
+        "stage": "discrete_coarse",
+        "score": 12.5,
+        "design": seed.to_dict(),
+        "metrics": {
+            "effective_focal_length_mm": 50.2,
+            "image_f_number": 4.0,
+            "image_distance_mm": 45.46,
+            "maximum_rms_spot_um": 20.0,
+            "edge_distortion_percent": 1.2,
+            "total_track_mm": 75.0,
+        },
+        "topology": {"label": "Tessar"},
+        "constraints_satisfied": True,
+        "parts": window._parts_from_design(seed),
+    }
+    window._populate_candidates([payload])
+    application.processEvents()
+
+    assert window.best_design is not None
+    assert len(window.best_design.elements) == 3
+    assert window.parts_table.rowCount() == 3
+    assert window.candidate_preview.scene().items()
+    assert not window.candidate_preview._gap_spins
+    window.shutdown()
     window.close()
     application.processEvents()

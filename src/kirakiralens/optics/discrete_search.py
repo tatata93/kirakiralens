@@ -10,6 +10,7 @@ import numpy as np
 
 from ..domain import LensElement, OpticalDesign, lens_element_from_dict
 from .configuration import resolved_field_weights
+from .classic_forms import design_matches_form, form_summary
 from .optiland_adapter import OptilandAdapter
 from .signature import analysis_signature
 
@@ -36,7 +37,7 @@ def run_discrete_search(
 
     random = Random(options["seed"])
     evaluation_limit = options["discrete_evaluations"]
-    beam_width = options["discrete_beam_width"]
+    beam_width = max(options["discrete_beam_width"], options["result_count"])
     start = monotonic()
     seen: set[str] = set()
     beam: list[ScoredDesign] = []
@@ -79,25 +80,25 @@ def run_discrete_search(
 
     if not beam or not np.isfinite(beam[0].score) or beam[0].score >= 1e29:
         return {"valid": False, "error": "有効な市販レンズ構成が見つかりませんでした", "evaluations": evaluations}
-    best = beam[0]
-    constraints_satisfied = _constraints_satisfied(best.metrics, options)
-    if not constraints_satisfied:
-        return {
-            "valid": False,
-            "error": "必須にした焦点距離またはバックフォーカス条件を満たす構成が見つかりませんでした",
-            "evaluations": evaluations,
-            "best_score": best.score,
-            "metrics": best.metrics,
-        }
+    valid_beam = [item for item in beam if np.isfinite(item.score) and item.score < 1e29]
+    _screen_top_mtf(valid_beam, options, deadline, progress, evaluations, start)
+    best = valid_beam[0]
+    topology = form_summary(options.get("classic_form", ""))
+    candidates = [
+        _candidate_summary(rank, item, topology, _constraints_satisfied(item.metrics, options))
+        for rank, item in enumerate(valid_beam[: options["result_count"]], 1)
+    ]
     return {
         "valid": True,
-        "constraints_satisfied": True,
+        "constraints_satisfied": _constraints_satisfied(best.metrics, options),
         "design": best.design,
         "initial_score": initial_score,
         "best_score": best.score,
         "evaluations": evaluations,
         "metrics": best.metrics,
         "changes": _identity_changes(source_design, best.design),
+        "candidates": candidates,
+        "topology": topology,
     }
 
 
@@ -161,6 +162,8 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
     design.settings.focal_length_target_mm = options["target_efl_mm"]
     design.settings.f_number_target = options["target_f_number"]
     try:
+        if not design_matches_form(design, options.get("classic_form", "")):
+            raise ValueError("classic form constraint violated")
         if not _mechanically_valid(design):
             raise ValueError("mechanical bounds violated")
         system = OptilandAdapter().to_optic(design)
@@ -181,12 +184,16 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
         else:
             image_distance = design.elements[-1].gap_after_mm
         efl = float(system.paraxial.f2())
+        total_track = _total_track_mm(design)
         score = options["efl_weight"] * ((efl - options["target_efl_mm"]) / options["efl_tolerance_mm"]) ** 2
         score += options["bfl_weight"] * _bfl_violation(image_distance, options) ** 2
+        score += options["track_weight"] * _track_violation(total_track, options) ** 2
         if options["efl_hard"] and abs(efl - options["target_efl_mm"]) > options["efl_tolerance_mm"]:
             score += 1e6 * ((abs(efl - options["target_efl_mm"]) / options["efl_tolerance_mm"]) ** 2)
         if options["bfl_hard"] and _bfl_violation(image_distance, options) > 0:
             score += 1e6 * max(_bfl_violation(image_distance, options), 1.0) ** 2
+        if options["track_hard"] and _track_violation(total_track, options) > 0:
+            score += 1e6 * max(_track_violation(total_track, options), 1.0) ** 2
 
         fields = [tuple(map(float, field)) for field in system.fields.get_field_coords()]
         wavelengths = [float(value) for value in system.wavelengths.get_wavelengths()]
@@ -221,6 +228,9 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
             "image_distance_mm": image_distance,
             "maximum_rms_spot_um": maximum_spot * 1000.0,
             "edge_distortion_percent": edge_distortion,
+            "total_track_mm": total_track,
+            "maximum_outer_diameter_mm": max(element.outer_diameter_mm for element in design.elements),
+            "mtf40_min": None,
         }
     except Exception:
         return 1e30, design, {
@@ -229,6 +239,9 @@ def _score_design(source: OpticalDesign, options: dict[str, Any]) -> tuple[float
             "image_distance_mm": design.elements[-1].gap_after_mm,
             "maximum_rms_spot_um": None,
             "edge_distortion_percent": None,
+            "total_track_mm": None,
+            "maximum_outer_diameter_mm": None,
+            "mtf40_min": None,
         }
 
 
@@ -245,6 +258,74 @@ def _mechanically_valid(design: OpticalDesign) -> bool:
         if element.gap_max_mm is not None and element.gap_after_mm > element.gap_max_mm:
             return False
     return True
+
+
+def _total_track_mm(design: OpticalDesign) -> float:
+    return sum(
+        element.gap_after_mm + sum(surface.thickness_after_mm for surface in element.surfaces[:-1])
+        for element in design.elements
+    )
+
+
+def _screen_top_mtf(
+    beam: list[ScoredDesign],
+    options: dict[str, Any],
+    deadline: float,
+    progress: Callable[[dict[str, Any]], None] | None,
+    evaluations: int,
+    start: float,
+) -> None:
+    from .performance import minimum_polychromatic_mtf
+
+    for index, item in enumerate(beam[: options["mtf_screen_count"]]):
+        if monotonic() >= deadline:
+            return
+        try:
+            system = OptilandAdapter().to_optic(item.design)
+            item.metrics["mtf40_min"] = minimum_polychromatic_mtf(system, item.design, 40.0, 3)
+        except Exception:
+            item.metrics["mtf40_min"] = None
+        if progress is not None:
+            progress(
+                {
+                    "phase": "上位候補MTF",
+                    "evaluations": evaluations,
+                    "mtf_candidates_done": index + 1,
+                    "best_score": beam[0].score,
+                    "elapsed_seconds": monotonic() - start,
+                    "time_limit_seconds": options["time_limit_seconds"],
+                }
+            )
+
+
+def _candidate_summary(
+    rank: int,
+    item: ScoredDesign,
+    topology: dict[str, object] | None,
+    constraints_satisfied: bool,
+) -> dict[str, Any]:
+    return {
+        "rank": rank,
+        "stage": "discrete_coarse",
+        "score": item.score,
+        "design": item.design.to_dict(),
+        "metrics": item.metrics,
+        "topology": topology,
+        "constraints_satisfied": constraints_satisfied,
+        "parts": [
+            {
+                "position": index + 1,
+                "manufacturer": element.manufacturer,
+                "part_number": element.part_number,
+                "name": element.name,
+                "shape": element.shape,
+                "orientation_reversed": element.orientation_reversed,
+                "diameter_mm": element.outer_diameter_mm,
+                "gap_after_mm": element.gap_after_mm,
+            }
+            for index, element in enumerate(item.design.elements)
+        ],
+    }
 
 
 def _normalize(values: list[float], count: int) -> list[float]:
@@ -280,7 +361,19 @@ def _constraints_satisfied(metrics: dict[str, float | None], options: dict[str, 
         image_distance is None or _bfl_violation(image_distance, options) > 0
     ):
         return False
+    total_track = metrics.get("total_track_mm")
+    if options["track_hard"] and (
+        total_track is None or _track_violation(total_track, options) > 0
+    ):
+        return False
     return True
+
+
+def _track_violation(total_track_mm: float, options: dict[str, Any]) -> float:
+    maximum = options["maximum_total_track_mm"]
+    if maximum is None:
+        return 0.0
+    return max(0.0, total_track_mm - maximum) / options["track_tolerance_mm"]
 
 
 def _identity_changes(before: OpticalDesign, after: OpticalDesign) -> list[dict[str, Any]]:

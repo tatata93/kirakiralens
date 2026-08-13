@@ -6,6 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -13,22 +14,27 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMainWindow,
     QProgressBar,
     QPushButton,
     QSpinBox,
+    QSplitter,
     QStyle,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from ..catalog.database import CatalogRepository
-from ..domain import OpticalDesign
+from ..domain import LensElement, OpticalDesign
 from ..optics.automatic_design import normalized_automatic_options, variable_candidates
+from ..optics.classic_forms import CLASSIC_FORMS, build_classic_design, classic_form
 from .automatic_design_controller import AutomaticDesignController
+from .lens_view import LensLayoutView
 
 
 class AutomaticDesignWindow(QMainWindow):
@@ -39,6 +45,7 @@ class AutomaticDesignWindow(QMainWindow):
         self.design = deepcopy(design)
         self.repository = CatalogRepository(repository_root / "data" / "generated" / "edmund_catalog.sqlite3")
         self.best_design: OpticalDesign | None = None
+        self.candidate_payloads: list[dict] = []
         self._generation = 0
         self._running = False
         self._controller = AutomaticDesignController(repository_root / ".tmp" / "matplotlib", self)
@@ -52,8 +59,10 @@ class AutomaticDesignWindow(QMainWindow):
         self._refresh_variable_count()
 
     def _build_ui(self) -> None:
-        central = QWidget()
-        layout = QVBoxLayout(central)
+        central = QTabWidget()
+        self.tabs = central
+        settings_page = QWidget()
+        layout = QVBoxLayout(settings_page)
         layout.setContentsMargins(12, 10, 12, 12)
 
         setup = QGroupBox("探索")
@@ -63,7 +72,8 @@ class AutomaticDesignWindow(QMainWindow):
         self.method.addItem("大域探索", "global")
         self.search_scope = QComboBox()
         self.search_scope.addItem("現在の構成を連続最適化", "continuous")
-        self.search_scope.addItem("市販レンズを離散探索して連続最適化", "discrete")
+        self.search_scope.addItem("現在の枚数で市販レンズを自由探索", "discrete")
+        self.search_scope.addItem("古典型から市販レンズを探索", "classic")
         self.time_limit = QSpinBox()
         self.time_limit.setRange(1, 86400)
         self.time_limit.setSuffix(" 秒")
@@ -100,6 +110,10 @@ class AutomaticDesignWindow(QMainWindow):
         self.maximum_bfl = self._value_spin(0.0, 1000.0, max(self.design.settings.back_focus_target_mm, 100.0), " mm")
         self.bfl_tolerance = self._value_spin(0.001, 100.0, self.design.settings.back_focus_tolerance_mm, " mm", 3)
         self.bfl_hard = QCheckBox("必須")
+        self.track_limit_enabled = QCheckBox("全長上限")
+        self.maximum_total_track = self._value_spin(0.1, 5000.0, 120.0, " mm")
+        self.track_hard = QCheckBox("必須")
+        self.track_hard.setChecked(True)
         target_grid.addWidget(QLabel("焦点距離"), 0, 0)
         target_grid.addWidget(self.target_efl, 0, 1)
         target_grid.addWidget(QLabel("許容差"), 0, 2)
@@ -114,6 +128,13 @@ class AutomaticDesignWindow(QMainWindow):
         target_grid.addWidget(self.maximum_bfl, 2, 3)
         target_grid.addWidget(self.bfl_tolerance, 2, 3)
         target_grid.addWidget(self.bfl_hard, 2, 4)
+        target_grid.addWidget(self.track_limit_enabled, 3, 0)
+        target_grid.addWidget(self.maximum_total_track, 3, 1)
+        target_grid.addWidget(self.track_hard, 3, 4)
+        self.track_limit_enabled.toggled.connect(self.maximum_total_track.setEnabled)
+        self.track_limit_enabled.toggled.connect(self.track_hard.setEnabled)
+        self.maximum_total_track.setEnabled(False)
+        self.track_hard.setEnabled(False)
         self.bfl_constraint.currentIndexChanged.connect(self._update_bfl_controls)
         layout.addWidget(target_group)
 
@@ -125,6 +146,16 @@ class AutomaticDesignWindow(QMainWindow):
         self.candidates_per_slot = QSpinBox()
         self.candidates_per_slot.setRange(1, 100)
         self.candidates_per_slot.setValue(8)
+        self.result_count = QSpinBox()
+        self.result_count.setRange(1, 50)
+        self.result_count.setValue(10)
+        self.mtf_screen_count = QSpinBox()
+        self.mtf_screen_count.setRange(0, 20)
+        self.mtf_screen_count.setValue(3)
+        self.classic_form = QComboBox()
+        for form in CLASSIC_FORMS.values():
+            self.classic_form.addItem(form.label, form.key)
+        self.classic_form.currentIndexChanged.connect(self._refresh_variable_count)
         self.manufacturer = QComboBox()
         self.manufacturer.addItem("全メーカー", "")
         for manufacturer in self.repository.filter_values("manufacturer"):
@@ -141,6 +172,12 @@ class AutomaticDesignWindow(QMainWindow):
         discrete_grid.addWidget(self.manufacturer, 1, 1)
         discrete_grid.addWidget(self.allow_orientation, 1, 2)
         discrete_grid.addWidget(self.allow_order, 1, 3)
+        discrete_grid.addWidget(QLabel("古典型"), 2, 0)
+        discrete_grid.addWidget(self.classic_form, 2, 1)
+        discrete_grid.addWidget(QLabel("保持する上位案"), 2, 2)
+        discrete_grid.addWidget(self.result_count, 2, 3)
+        discrete_grid.addWidget(QLabel("MTF詳細評価案"), 3, 2)
+        discrete_grid.addWidget(self.mtf_screen_count, 3, 3)
         layout.addWidget(self.discrete_group)
         self.search_scope.currentIndexChanged.connect(self._search_scope_changed)
 
@@ -165,16 +202,18 @@ class AutomaticDesignWindow(QMainWindow):
         self.bfl_weight = self._weight_spin(2.0)
         self.spot_weight = self._weight_spin(10.0)
         self.distortion_weight = self._weight_spin(1.0)
+        self.track_weight = self._weight_spin(1.0)
         merit_form.addRow("焦点距離", self.efl_weight)
         merit_form.addRow("像面位置", self.bfl_weight)
         merit_form.addRow("多視野・多波長RMSスポット", self.spot_weight)
         merit_form.addRow("歪曲", self.distortion_weight)
+        merit_form.addRow("全長超過", self.track_weight)
         layout.addWidget(merit_group)
 
         controls = QHBoxLayout()
         self.start_button = QPushButton(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay), "開始")
         self.stop_button = QPushButton(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop), "停止")
-        self.apply_button = QPushButton("最良案を設計へ適用")
+        self.apply_button = QPushButton("選択案を設計へ適用")
         self.stop_button.setEnabled(False)
         self.apply_button.setEnabled(False)
         self.start_button.clicked.connect(self.start)
@@ -197,9 +236,58 @@ class AutomaticDesignWindow(QMainWindow):
         self.result_table.verticalHeader().hide()
         self.result_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         layout.addWidget(self.result_table, 1)
+        central.addTab(settings_page, "探索設定")
+        central.addTab(self._build_candidate_page(), "候補比較")
         self.setCentralWidget(central)
         self._update_bfl_controls()
         self._search_scope_changed()
+
+    def _build_candidate_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        splitter = QSplitter(Qt.Orientation.Vertical)
+
+        self.candidate_table = QTableWidget(0, 12)
+        self.candidate_table.setHorizontalHeaderLabels(
+            ["順位", "段階", "型", "制約", "スコア", "EFL", "F値", "BFL", "RMS", "MTF40", "歪曲", "全長"]
+        )
+        self.candidate_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.candidate_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.candidate_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.candidate_table.verticalHeader().hide()
+        self.candidate_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.candidate_table.horizontalHeader().setStretchLastSection(True)
+        self.candidate_table.currentCellChanged.connect(self._candidate_selected)
+        splitter.addWidget(self.candidate_table)
+
+        detail = QWidget()
+        detail_layout = QVBoxLayout(detail)
+        detail_layout.setContentsMargins(0, 6, 0, 0)
+        self.candidate_summary = QLabel("探索後、候補を選択すると構成を比較できます")
+        self.candidate_summary.setWordWrap(True)
+        detail_layout.addWidget(self.candidate_summary)
+        detail_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.candidate_preview = LensLayoutView(editable=False)
+        self.candidate_preview.setMinimumHeight(240)
+        detail_splitter.addWidget(self.candidate_preview)
+        self.parts_table = QTableWidget(0, 6)
+        self.parts_table.setHorizontalHeaderLabels(["位置", "メーカー", "型番", "形状", "向き", "後方間隔"])
+        self.parts_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.parts_table.verticalHeader().hide()
+        self.parts_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.parts_table.horizontalHeader().setStretchLastSection(True)
+        detail_splitter.addWidget(self.parts_table)
+        detail_splitter.setSizes([470, 410])
+        detail_layout.addWidget(detail_splitter, 1)
+        self.apply_candidate_button = QPushButton("この候補を設計へ適用")
+        self.apply_candidate_button.setEnabled(False)
+        self.apply_candidate_button.clicked.connect(self._apply_best)
+        detail_layout.addWidget(self.apply_candidate_button)
+        splitter.addWidget(detail)
+        splitter.setSizes([260, 480])
+        layout.addWidget(splitter)
+        return page
 
     @staticmethod
     def _weight_spin(value: float) -> QDoubleSpinBox:
@@ -230,7 +318,13 @@ class AutomaticDesignWindow(QMainWindow):
         self.target_bfl.setValue(design.settings.back_focus_target_mm)
         self.minimum_bfl.setValue(design.settings.back_focus_target_mm)
         self.best_design = None
+        self.candidate_payloads = []
+        self.candidate_table.setRowCount(0)
+        self.parts_table.setRowCount(0)
+        self.candidate_preview.set_design(design)
+        self.candidate_summary.setText("探索後、候補を選択すると構成を比較できます")
         self.apply_button.setEnabled(False)
+        self.apply_candidate_button.setEnabled(False)
         self._refresh_variable_count()
         self.status.setText("設計を更新しました")
 
@@ -248,6 +342,7 @@ class AutomaticDesignWindow(QMainWindow):
                 "bfl_weight": self.bfl_weight.value(),
                 "spot_weight": self.spot_weight.value(),
                 "distortion_weight": self.distortion_weight.value(),
+                "track_weight": self.track_weight.value(),
                 "target_efl_mm": self.target_efl.value(),
                 "efl_tolerance_mm": self.efl_tolerance.value(),
                 "efl_hard": self.efl_hard.isChecked(),
@@ -258,10 +353,15 @@ class AutomaticDesignWindow(QMainWindow):
                 "maximum_bfl_mm": self.maximum_bfl.value(),
                 "bfl_tolerance_mm": self.bfl_tolerance.value(),
                 "bfl_hard": self.bfl_hard.isChecked(),
-                "discrete_search": self.search_scope.currentData() == "discrete",
+                "maximum_total_track_mm": self.maximum_total_track.value() if self.track_limit_enabled.isChecked() else None,
+                "track_hard": self.track_limit_enabled.isChecked() and self.track_hard.isChecked(),
+                "discrete_search": self.search_scope.currentData() in {"discrete", "classic"},
                 "discrete_evaluations": self.discrete_evaluations.value(),
+                "result_count": self.result_count.value(),
+                "mtf_screen_count": min(self.mtf_screen_count.value(), self.result_count.value()),
+                "classic_form": self.classic_form.currentData() if self.search_scope.currentData() == "classic" else "",
                 "allow_orientation_search": self.allow_orientation.isChecked(),
-                "allow_order_search": self.allow_order.isChecked(),
+                "allow_order_search": self.allow_order.isChecked() and self.search_scope.currentData() != "classic",
             }
         )
 
@@ -274,10 +374,16 @@ class AutomaticDesignWindow(QMainWindow):
         self.bfl_hard.setEnabled(mode != "off")
 
     def _search_scope_changed(self) -> None:
-        self.discrete_group.setEnabled(self.search_scope.currentData() == "discrete")
+        mode = self.search_scope.currentData()
+        self.discrete_group.setEnabled(mode in {"discrete", "classic"})
+        self.classic_form.setEnabled(mode == "classic")
+        self.allow_order.setEnabled(mode == "discrete")
         self._refresh_variable_count()
 
     def _candidate_pool(self) -> list[list[dict]]:
+        if self.search_scope.currentData() == "classic":
+            pool, _ = self._classic_candidate_payload()
+            return pool
         pool: list[list[dict]] = []
         minimum_aperture = self.target_efl.value() / max(self.target_f_number.value(), 0.5)
         for element in self.design.elements:
@@ -309,6 +415,69 @@ class AutomaticDesignWindow(QMainWindow):
             pool.append([asdict(candidate) for candidate in candidates])
         return pool
 
+    def _classic_candidate_payload(self) -> tuple[list[list[dict]], OpticalDesign]:
+        form = classic_form(str(self.classic_form.currentData()))
+        minimum_aperture = self.target_efl.value() / max(self.target_f_number.value(), 0.5)
+        manufacturer = str(self.manufacturer.currentData())
+        pool_elements: list[list[LensElement]] = []
+        for slot in form.slots:
+            target_part_efl = self.target_efl.value() * slot.target_efl_scale
+            products = []
+            for shape in slot.shapes:
+                products.extend(
+                    self.repository.query_products(
+                        shape=shape,
+                        power=slot.power,
+                        manufacturer=manufacturer,
+                        max_diameter_mm=self.design.settings.max_outer_diameter_mm,
+                        min_clear_aperture_mm=minimum_aperture,
+                        target_efl_mm=target_part_efl,
+                        limit=max(self.candidates_per_slot.value(), 4),
+                    )
+                )
+            products.sort(
+                key=lambda product: (
+                    abs(abs(product.effective_focal_length_mm or 1e9) - target_part_efl),
+                    -(product.clear_aperture_mm or 0.0),
+                    product.part_number,
+                )
+            )
+            unique_products = []
+            seen: set[int] = set()
+            for product in products:
+                if product.id in seen:
+                    continue
+                unique_products.append(product)
+                seen.add(product.id)
+                if len(unique_products) >= self.candidates_per_slot.value():
+                    break
+            if not unique_products:
+                raise ValueError(f"{form.label}: {slot.label}に使えるカタログ部品がありません")
+            pool_elements.append([self.repository.element_from_product(product.id) for product in unique_products])
+
+        image_distance = self._classic_image_distance()
+        seed = build_classic_design(
+            self.design,
+            form.key,
+            [slot[0] for slot in pool_elements],
+            self.target_efl.value(),
+            image_distance,
+        )
+        pool = [[asdict(element) for element in slot] for slot in pool_elements]
+        return pool, seed
+
+    def _classic_image_distance(self) -> float:
+        mode = self.bfl_constraint.currentData()
+        if mode == "target":
+            return self.target_bfl.value()
+        if mode == "minimum":
+            return self.minimum_bfl.value()
+        if mode == "range":
+            return (self.minimum_bfl.value() + self.maximum_bfl.value()) / 2.0
+        if self.design.elements:
+            return self.design.elements[-1].gap_after_mm
+        return self.design.settings.back_focus_target_mm
+
     @staticmethod
     def _element_power(element) -> str:
         shape = element.shape.lower()
@@ -317,21 +486,37 @@ class AutomaticDesignWindow(QMainWindow):
         return "positive"
 
     def _refresh_variable_count(self) -> None:
+        mode = self.search_scope.currentData()
         count = len(variable_candidates(self.design, self._options()))
-        discrete = self.search_scope.currentData() == "discrete"
-        self.variable_count.setText(f"連続 {count} 個" + (" / 離散あり" if discrete else ""))
-        self.start_button.setEnabled((count > 0 or (discrete and bool(self.design.elements))) and not self._running)
+        if mode == "classic":
+            form = classic_form(str(self.classic_form.currentData()))
+            self.variable_count.setText(f"{form.label} / {len(form.slots)}部品 / 離散+連続")
+        else:
+            self.variable_count.setText(f"連続 {count} 個" + (" / 離散あり" if mode == "discrete" else ""))
+        can_start = count > 0 or mode == "classic" or (mode == "discrete" and bool(self.design.elements))
+        self.start_button.setEnabled(can_start and not self._running)
 
     def start(self) -> None:
         self._generation += 1
         self.best_design = None
+        self.candidate_payloads = []
         self.apply_button.setEnabled(False)
+        self.apply_candidate_button.setEnabled(False)
         self.result_table.setRowCount(0)
+        self.candidate_table.setRowCount(0)
         self.progress_bar.setValue(0)
         self.status.setText("Optilandで実光線を評価しています")
         options = self._options()
         if options["discrete_search"]:
-            options["candidate_pool"] = self._candidate_pool()
+            try:
+                if options["classic_form"]:
+                    options["candidate_pool"], seed = self._classic_candidate_payload()
+                    options["classic_seed_design"] = seed.to_dict()
+                else:
+                    options["candidate_pool"] = self._candidate_pool()
+            except (KeyError, TypeError, ValueError) as exc:
+                self.status.setText(str(exc))
+                return
         self._controller.start(self._generation, self.design, options)
 
     @Slot(int, object)
@@ -340,9 +525,11 @@ class AutomaticDesignWindow(QMainWindow):
             return
         elapsed = float(result.get("elapsed_seconds", 0.0))
         limit = max(float(result.get("time_limit_seconds", 1.0)), 1.0)
+        phase = str(result.get("phase", "連続最適化"))
         self.progress_bar.setValue(min(int(elapsed / limit * 1000), 1000))
         self.status.setText(
-            f"評価 {int(result.get('evaluations', 0))} 回 / 最良スコア {float(result.get('best_score', 0.0)):.5g} / {elapsed:.1f} 秒"
+            f"{phase}: 評価 {int(result.get('evaluations', 0))} 回 / "
+            f"最良スコア {float(result.get('best_score', 0.0)):.5g} / {elapsed:.1f} 秒"
         )
 
     @Slot(int, object)
@@ -361,12 +548,18 @@ class AutomaticDesignWindow(QMainWindow):
         metrics = result.get("metrics", {})
         targets = result.get("targets", {})
         bfl_target = self._bfl_target_text(targets)
+        track_target = (
+            f"<= {targets['maximum_total_track_mm']:.6g}"
+            if targets.get("maximum_total_track_mm") is not None
+            else "制約なし"
+        )
         rows = [
             ("評価スコア", result.get("initial_score"), 0.0, result.get("best_score")),
             ("実効焦点距離 [mm]", None, targets.get("effective_focal_length_mm"), metrics.get("effective_focal_length_mm")),
             ("F値", self.design.settings.f_number_target, targets.get("f_number"), metrics.get("image_f_number")),
             ("像面位置 [mm]", self.design.elements[-1].gap_after_mm, bfl_target, metrics.get("image_distance_mm")),
             ("最大RMSスポット [µm]", None, None, metrics.get("maximum_rms_spot_um")),
+            ("全長 [mm]", None, track_target, metrics.get("total_track_mm")),
             ("Airy半径 [µm]", None, None, metrics.get("diffraction_airy_radius_um")),
         ]
         changes = result.get("changes", [])
@@ -379,6 +572,112 @@ class AutomaticDesignWindow(QMainWindow):
                 if column:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.result_table.setItem(row, column, item)
+        candidates = list(result.get("candidates", []))
+        if not candidates:
+            candidates = [
+                {
+                    "rank": 1,
+                    "stage": "continuous_optimized",
+                    "score": result.get("best_score"),
+                    "design": result["design"],
+                    "metrics": metrics,
+                    "topology": result.get("topology"),
+                    "parts": self._parts_from_design(self.best_design),
+                }
+            ]
+        self._populate_candidates(candidates)
+        self.tabs.setCurrentIndex(1)
+
+    def _populate_candidates(self, candidates: list[dict]) -> None:
+        self.candidate_payloads = candidates
+        self.candidate_table.blockSignals(True)
+        self.candidate_table.setRowCount(len(candidates))
+        for row, candidate in enumerate(candidates):
+            metrics = candidate.get("metrics", {})
+            topology = candidate.get("topology") or {}
+            stage = "連続最適化" if candidate.get("stage") == "continuous_optimized" else "離散評価"
+            values = [
+                candidate.get("rank", row + 1),
+                stage,
+                topology.get("label", "自由構成"),
+                "適合" if candidate.get("constraints_satisfied", True) else "未達",
+                candidate.get("score"),
+                metrics.get("effective_focal_length_mm"),
+                metrics.get("image_f_number"),
+                metrics.get("image_distance_mm"),
+                metrics.get("maximum_rms_spot_um"),
+                metrics.get("mtf40_min"),
+                metrics.get("edge_distortion_percent"),
+                metrics.get("total_track_mm"),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(self._display_value(value))
+                if column not in {1, 2, 3}:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.candidate_table.setItem(row, column, item)
+        self.candidate_table.blockSignals(False)
+        if candidates:
+            self.candidate_table.setCurrentCell(0, 0)
+
+    @Slot(int, int, int, int)
+    def _candidate_selected(self, current_row: int, _current_column: int, _previous_row: int, _previous_column: int) -> None:
+        if not 0 <= current_row < len(self.candidate_payloads):
+            return
+        candidate = self.candidate_payloads[current_row]
+        design = OpticalDesign.from_dict(candidate["design"])
+        self.best_design = design
+        self.candidate_preview.set_design(design)
+        topology = candidate.get("topology") or {}
+        metrics = candidate.get("metrics", {})
+        form_name = topology.get("label", "自由構成")
+        stage = "連続最適化済み" if candidate.get("stage") == "continuous_optimized" else "離散粗評価"
+        self.candidate_summary.setText(
+            f"候補 {current_row + 1} / {len(self.candidate_payloads)}  {form_name}  {stage}  "
+            f"EFL {self._display_value(metrics.get('effective_focal_length_mm'))} mm  "
+            f"BFL {self._display_value(metrics.get('image_distance_mm'))} mm  "
+            f"MTF40 {self._display_value(metrics.get('mtf40_min'))}"
+        )
+        parts = candidate.get("parts") or self._parts_from_design(design)
+        self.parts_table.setRowCount(len(parts))
+        for row, part in enumerate(parts):
+            values = [
+                part.get("position", row + 1),
+                part.get("manufacturer", ""),
+                part.get("part_number") or part.get("name", ""),
+                part.get("shape", ""),
+                "反転" if part.get("orientation_reversed") else "正向き",
+                part.get("gap_after_mm"),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(self._display_value(value))
+                if column in {0, 5}:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.parts_table.setItem(row, column, item)
+        self.apply_button.setEnabled(True)
+        self.apply_candidate_button.setEnabled(True)
+
+    @staticmethod
+    def _parts_from_design(design: OpticalDesign) -> list[dict]:
+        return [
+            {
+                "position": index + 1,
+                "manufacturer": element.manufacturer,
+                "part_number": element.part_number,
+                "name": element.name,
+                "shape": element.shape,
+                "orientation_reversed": element.orientation_reversed,
+                "gap_after_mm": element.gap_after_mm,
+            }
+            for index, element in enumerate(design.elements)
+        ]
+
+    @staticmethod
+    def _display_value(value) -> str:
+        if value is None:
+            return "-"
+        if isinstance(value, float):
+            return f"{value:.6g}"
+        return str(value)
 
     @staticmethod
     def _bfl_target_text(targets: dict) -> str:
@@ -394,8 +693,9 @@ class AutomaticDesignWindow(QMainWindow):
     @Slot(bool)
     def _running_changed(self, running: bool) -> None:
         self._running = running
-        can_start = bool(variable_candidates(self.design, self._options())) or (
-            self.search_scope.currentData() == "discrete" and bool(self.design.elements)
+        mode = self.search_scope.currentData()
+        can_start = bool(variable_candidates(self.design, self._options())) or mode == "classic" or (
+            mode == "discrete" and bool(self.design.elements)
         )
         self.start_button.setEnabled(not running and can_start)
         self.stop_button.setEnabled(running)

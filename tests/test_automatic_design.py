@@ -41,6 +41,10 @@ def test_discrete_design_accepts_numeric_f_number_and_minimum_bfl() -> None:
     assert result["targets"]["minimum_bfl_mm"] == 40.0
     assert abs(result["metrics"]["image_f_number"] - 5.6) < 1e-6
     assert result["metrics"]["image_distance_mm"] == 41.0
+    assert len(result["candidates"]) == 1
+    assert result["candidates"][0]["parts"][0]["position"] == 1
+    assert 0.0 <= result["candidates"][0]["metrics"]["mtf40_min"] <= 1.0
+    assert "candidate_pool" not in result["options"]
     json.dumps(result, allow_nan=False)
 
 
